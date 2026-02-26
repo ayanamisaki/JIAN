@@ -18,7 +18,13 @@ import {
   Settings,
   Download,
   X,
-  AlertCircle as AlertIcon
+  AlertCircle as AlertIcon,
+  Heart,
+  Star,
+  ArrowRight,
+  ThumbsUp,
+  ThumbsDown,
+  Store
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, differenceInDays, differenceInYears } from 'date-fns';
@@ -31,7 +37,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { cn } from './lib/utils';
-import { Item, Log, CategoryStat, HistoryPoint, Category } from './types';
+import { Item, Log, CategoryStat, HistoryPoint, Category, WishlistItem, PriceComparison } from './types';
 
 const SLOGANS = [
   "拥有的越少，得到的越多。",
@@ -43,12 +49,43 @@ const SLOGANS = [
   "物品不应成为负担，而应是生活的助力。"
 ];
 
+const CollapsibleLogSection: React.FC<{ 
+  title: string, 
+  children: React.ReactNode, 
+  defaultOpen?: boolean,
+  level?: number 
+}> = ({ title, children, defaultOpen = false, level = 0 }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  
+  return (
+    <div className={cn("space-y-2", level > 0 && "ml-4 border-l border-black/[0.03] pl-4")}>
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2 w-full text-left group py-1"
+      >
+        <ChevronRight 
+          size={12} 
+          className={cn("text-black/20 transition-transform", isOpen && "rotate-90")} 
+        />
+        <span className={cn(
+          "font-bold uppercase tracking-widest text-black/40 group-hover:text-black transition-colors",
+          level === 0 ? "text-[10px]" : "text-[9px]"
+        )}>
+          {title}
+        </span>
+      </button>
+      {isOpen && <div className="space-y-2 pb-2">{children}</div>}
+    </div>
+  );
+};
+
 // --- Storage Helpers ---
 
 const STORAGE_KEYS = {
   ITEMS: 'jian_items_v2',
   LOGS: 'jian_logs_v2',
-  CATEGORIES: 'jian_categories_v2'
+  CATEGORIES: 'jian_categories_v2',
+  WISHLIST: 'jian_wishlist_v2'
 };
 
 const storage = {
@@ -58,6 +95,8 @@ const storage = {
   setLogs: (logs: Log[]) => localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(logs)),
   getCategories: (): Category[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.CATEGORIES) || '[]'),
   setCategories: (categories: Category[]) => localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories)),
+  getWishlist: (): WishlistItem[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.WISHLIST) || '[]'),
+  setWishlist: (items: WishlistItem[]) => localStorage.setItem(STORAGE_KEYS.WISHLIST, JSON.stringify(items)),
 };
 
 const calculateStats = (items: Item[], logs: Log[]) => {
@@ -100,8 +139,8 @@ const Navbar: React.FC<{ activeTab: string, setActiveTab: (t: string) => void }>
   const tabs = [
     { id: 'items', label: '持有', icon: Package },
     { id: 'hesitation', label: '犹豫', icon: AlertTriangle },
+    { id: 'shopping', label: '购物', icon: ShoppingBag },
     { id: 'stats', label: '统计', icon: PieChart },
-    { id: 'logs', label: '日志', icon: History },
     { id: 'settings', label: '设置', icon: Settings },
   ];
 
@@ -376,7 +415,7 @@ const ItemModal: React.FC<{
               value={formData.name}
               onChange={e => setFormData({...formData, name: e.target.value})}
               className="minimal-input" 
-              placeholder="Name"
+              placeholder="物品名称"
             />
           </div>
 
@@ -389,7 +428,7 @@ const ItemModal: React.FC<{
                   value={formData.category}
                   onChange={e => setFormData({...formData, category: e.target.value})}
                   className="minimal-input" 
-                  placeholder="Category"
+                  placeholder="分类"
                 />
                 <datalist id="categories-list">
                   {categories.map(c => <option key={c.id} value={c.name} />)}
@@ -453,7 +492,7 @@ const ItemModal: React.FC<{
               value={formData.location}
               onChange={e => setFormData({...formData, location: e.target.value})}
               className="minimal-input" 
-              placeholder="Location"
+              placeholder="存放位置"
             />
           </div>
 
@@ -463,7 +502,7 @@ const ItemModal: React.FC<{
               value={formData.notes}
               onChange={e => setFormData({...formData, notes: e.target.value})}
               className="minimal-input min-h-[80px] resize-none" 
-              placeholder="Notes..."
+              placeholder="写下关于这件物品的心情或备注..."
             />
           </div>
 
@@ -499,6 +538,270 @@ const ItemModal: React.FC<{
   );
 };
 
+const WishlistItemCard: React.FC<{ 
+  item: WishlistItem, 
+  onEdit: (item: WishlistItem) => void,
+  onStatusChange: (id: number, status: WishlistItem['status']) => void 
+}> = ({ item, onEdit, onStatusChange }) => {
+  const minPrice = item.prices.length > 0 ? Math.min(...item.prices.map(p => p.price)) : 0;
+  const daysOnList = differenceInDays(new Date(), new Date(item.created_at));
+  const isAbandoned = item.status === 'abandoned';
+
+  return (
+    <motion.div 
+      layout
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      className={cn(
+        "bg-white border-b border-black/5 p-6 group cursor-pointer hover:bg-black/[0.01] transition-all",
+        isAbandoned && "opacity-60 grayscale-[0.5]"
+      )}
+      onClick={() => onEdit(item)}
+    >
+      <div className="flex justify-between items-start mb-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 mb-1">
+            <h3 className={cn("text-lg font-medium text-black/90 truncate", isAbandoned && "line-through text-black/40")}>{item.name}</h3>
+            <div className="flex gap-0.5">
+              {[...Array(5)].map((_, i) => (
+                <Star 
+                  key={i} 
+                  size={10} 
+                  className={cn(i < item.desire_level ? "text-black fill-black" : "text-black/10")} 
+                />
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-4 text-[10px] text-black/30 font-mono uppercase tracking-widest">
+            <span>{item.category || '未分类'}</span>
+            <span>已加入 {daysOnList} 天</span>
+            {isAbandoned && <span className="text-red-400 font-bold">已放弃</span>}
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-lg font-mono font-light">¥{minPrice.toLocaleString()}</p>
+          <p className="text-[9px] text-black/20 uppercase tracking-widest font-bold">最优价格</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-1 text-[9px] font-bold text-emerald-600/60 uppercase tracking-widest">
+            <ThumbsUp size={10} /> 优点
+          </div>
+          <p className="text-xs text-black/60 line-clamp-1">{item.pros || '未填写'}</p>
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center gap-1 text-[9px] font-bold text-red-600/60 uppercase tracking-widest">
+            <ThumbsDown size={10} /> 缺点
+          </div>
+          <p className="text-xs text-black/60 line-clamp-1">{item.cons || '未填写'}</p>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between pt-4 border-t border-black/[0.03]">
+        <div className="flex gap-4">
+          {item.logs.slice(-1).map(log => (
+            <span key={log.id} className="text-[9px] text-black/20 font-mono italic">
+              最新: {log.action} ({format(new Date(log.date), 'MM.dd')})
+            </span>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          {!isAbandoned ? (
+            <>
+              <button 
+                onClick={(e) => { e.stopPropagation(); onStatusChange(item.id, 'purchased'); }}
+                className="px-3 py-1 text-[9px] font-bold uppercase tracking-widest border border-black/10 hover:bg-black hover:text-white transition-all"
+              >已购</button>
+              <button 
+                onClick={(e) => { e.stopPropagation(); onStatusChange(item.id, 'abandoned'); }}
+                className="px-3 py-1 text-[9px] font-bold uppercase tracking-widest border border-black/10 hover:bg-red-500 hover:text-white hover:border-red-500 transition-all"
+              >放弃</button>
+            </>
+          ) : (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onStatusChange(item.id, 'considering'); }}
+              className="px-3 py-1 text-[9px] font-bold uppercase tracking-widest border border-black/10 hover:bg-black hover:text-white transition-all"
+            >恢复考虑</button>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+const WishlistModal: React.FC<{
+  isOpen: boolean,
+  onClose: () => void,
+  onSave: () => void,
+  item?: WishlistItem | null,
+  categories: Category[]
+}> = ({ isOpen, onClose, onSave, item, categories }) => {
+  const [formData, setFormData] = useState({
+    name: '',
+    category: '',
+    prices: [{ platform: '', price: 0 }] as PriceComparison[],
+    reason_to_buy: '',
+    reason_to_quit: '',
+    pros: '',
+    cons: '',
+    desire_level: 3,
+    status: 'considering' as WishlistItem['status']
+  });
+
+  useEffect(() => {
+    if (item) {
+      setFormData({
+        name: item.name,
+        category: item.category || '',
+        prices: item.prices.length > 0 ? item.prices : [{ platform: '', price: 0 }],
+        reason_to_buy: item.reason_to_buy || '',
+        reason_to_quit: item.reason_to_quit || '',
+        pros: item.pros || '',
+        cons: item.cons || '',
+        desire_level: item.desire_level || 3,
+        status: item.status
+      });
+    } else {
+      setFormData({
+        name: '',
+        category: '',
+        prices: [{ platform: '', price: 0 }],
+        reason_to_buy: '',
+        reason_to_quit: '',
+        pros: '',
+        cons: '',
+        desire_level: 3,
+        status: 'considering'
+      });
+    }
+  }, [item, isOpen]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const allWishlist = storage.getWishlist();
+    const now = new Date().toISOString();
+    const dateStr = now.split('T')[0];
+
+    if (item) {
+      const updated = allWishlist.map(i => {
+        if (i.id === item.id) {
+          const newLogs = [...i.logs];
+          if (i.status !== formData.status) {
+            newLogs.push({ id: Date.now(), date: dateStr, action: `状态变更: ${formData.status}` });
+          }
+          return { ...i, ...formData, logs: newLogs };
+        }
+        return i;
+      });
+      storage.setWishlist(updated);
+    } else {
+      const newItem: WishlistItem = {
+        ...formData,
+        id: Date.now(),
+        created_at: now,
+        logs: [{ id: Date.now(), date: dateStr, action: '新建清单' }]
+      };
+      storage.setWishlist([...allWishlist, newItem]);
+    }
+
+    onSave();
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-lg bg-white rounded-none shadow-2xl p-8 max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-center mb-8">
+          <h2 className="text-2xl font-serif font-bold">{item ? '编辑清单' : '添加心愿'}</h2>
+          <button onClick={onClose} className="p-2 hover:bg-black/5 rounded-full transition-colors"><X size={20} /></button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-8">
+          <div className="space-y-6">
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">物品名称</label>
+              <input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="minimal-input" placeholder="您想要什么？" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">分类</label>
+                <input list="categories-list" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="minimal-input" placeholder="分类" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">欲望值</label>
+                <div className="flex gap-2 py-2">
+                  {[1, 2, 3, 4, 5].map(level => (
+                    <button key={level} type="button" onClick={() => setFormData({...formData, desire_level: level})} className={cn("p-1 transition-all", formData.desire_level >= level ? "text-black" : "text-black/10")}>
+                      <Star size={16} className={formData.desire_level >= level ? "fill-black" : ""} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest flex justify-between">
+                价格比对 
+                <button type="button" onClick={() => setFormData({...formData, prices: [...formData.prices, { platform: '', price: 0 }]})} className="text-black hover:opacity-50 transition-opacity"><Plus size={12} /></button>
+              </label>
+              {formData.prices.map((p, idx) => (
+                <div key={idx} className="flex gap-4">
+                  <input value={p.platform} onChange={e => {
+                    const newPrices = [...formData.prices];
+                    newPrices[idx].platform = e.target.value;
+                    setFormData({...formData, prices: newPrices});
+                  }} className="flex-1 minimal-input text-xs" placeholder="平台 (如：淘宝)" />
+                  <input type="number" value={p.price || ''} onChange={e => {
+                    const newPrices = [...formData.prices];
+                    newPrices[idx].price = parseFloat(e.target.value) || 0;
+                    setFormData({...formData, prices: newPrices});
+                  }} className="w-24 minimal-input text-xs font-mono" placeholder="价格" />
+                  {formData.prices.length > 1 && (
+                    <button type="button" onClick={() => setFormData({...formData, prices: formData.prices.filter((_, i) => i !== idx)})} className="text-black/20 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-emerald-600/40 uppercase tracking-widest">想买理由</label>
+                <textarea value={formData.reason_to_buy} onChange={e => setFormData({...formData, reason_to_buy: e.target.value})} className="minimal-input text-xs min-h-[60px] resize-none" placeholder="为什么要买？" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-red-600/40 uppercase tracking-widest">劝退理由</label>
+                <textarea value={formData.reason_to_quit} onChange={e => setFormData({...formData, reason_to_quit: e.target.value})} className="minimal-input text-xs min-h-[60px] resize-none" placeholder="为什么不买？" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">优点</label>
+                <textarea value={formData.pros} onChange={e => setFormData({...formData, pros: e.target.value})} className="minimal-input text-xs min-h-[60px] resize-none" placeholder="优点" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">缺点</label>
+                <textarea value={formData.cons} onChange={e => setFormData({...formData, cons: e.target.value})} className="minimal-input text-xs min-h-[60px] resize-none" placeholder="缺点" />
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" className="minimal-button w-full py-4 text-sm font-bold uppercase tracking-widest">
+            {item ? '保存修改' : '加入清单'}
+          </button>
+        </form>
+      </motion.div>
+    </div>
+  );
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -506,6 +809,7 @@ export default function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [logs, setLogs] = useState<Log[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [wishlist, setWishlist] = useState<WishlistItem[]>([]);
   const [stats, setStats] = useState<{ 
     categoryStats: CategoryStat[], 
     history: HistoryPoint[],
@@ -516,7 +820,9 @@ export default function App() {
     summary: { discarded: 0, gifted: 0, sold: 0, soldValue: 0 }
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isWishlistModalOpen, setIsWishlistModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [editingWishlistItem, setEditingWishlistItem] = useState<WishlistItem | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [slogan] = useState(() => SLOGANS[Math.floor(Math.random() * SLOGANS.length)]);
   const [detailView, setDetailView] = useState<string | null>(null);
@@ -532,10 +838,12 @@ export default function App() {
     const localItems = storage.getItems();
     const localLogs = storage.getLogs();
     const localCategories = storage.getCategories();
+    const localWishlist = storage.getWishlist();
     
     setItems(localItems.filter(i => i.status === 'active'));
     setLogs(localLogs);
     setCategories(localCategories);
+    setWishlist(localWishlist);
     setStats(calculateStats(localItems, localLogs));
   };
 
@@ -664,11 +972,64 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const handleWishlistStatusChange = (id: number, status: WishlistItem['status']) => {
+    const allWishlist = storage.getWishlist();
+    const item = allWishlist.find(i => i.id === id);
+    if (!item) return;
+
+    const now = new Date().toISOString();
+    const dateStr = now.split('T')[0];
+
+    if (status === 'purchased') {
+      // Move to items
+      const minPrice = item.prices.length > 0 ? Math.min(...item.prices.map(p => p.price)) : 0;
+      const newItem: Item = {
+        id: Date.now(),
+        name: item.name,
+        category: item.category,
+        price: minPrice,
+        purchase_date: dateStr,
+        fuzzy_date: null,
+        location: '',
+        status: 'active',
+        is_hesitation: 0,
+        notes: `From Wishlist. Reason: ${item.reason_to_buy}`,
+        created_at: now
+      };
+      
+      const allItems = storage.getItems();
+      storage.setItems([...allItems, newItem]);
+      
+      const allLogs = storage.getLogs();
+      storage.setLogs([...allLogs, { 
+        id: Date.now() + 1, 
+        item_id: newItem.id, 
+        action: 'add', 
+        item_name: newItem.name, 
+        date: dateStr,
+        note: '从心愿单购入'
+      }]);
+
+      // Remove from wishlist
+      storage.setWishlist(allWishlist.filter(i => i.id !== id));
+    } else {
+      // Just update status
+      const updated = allWishlist.map(i => i.id === id ? { 
+        ...i, 
+        status, 
+        logs: [...i.logs, { id: Date.now(), date: dateStr, action: `状态变更: ${status}` }] 
+      } : i);
+      storage.setWishlist(updated);
+    }
+    fetchData();
+  };
+
   const exportToJSON = () => {
     const data = {
       items: storage.getItems(),
       logs: storage.getLogs(),
-      categories: storage.getCategories()
+      categories: storage.getCategories(),
+      wishlist: storage.getWishlist()
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -689,6 +1050,7 @@ export default function App() {
           storage.setItems(data.items);
           storage.setLogs(data.logs);
           storage.setCategories(data.categories);
+          if (data.wishlist) storage.setWishlist(data.wishlist);
           fetchData();
           alert('导入成功');
         } else {
@@ -713,10 +1075,16 @@ export default function App() {
     return acc;
   }, {});
 
-  const groupedLogs = logs.reduce((acc: Record<string, Log[]>, log) => {
-    const month = format(new Date(log.date), 'yyyy年MM月');
-    if (!acc[month]) acc[month] = [];
-    acc[month].push(log);
+  const groupedLogs = logs.reduce((acc: any, log) => {
+    const date = new Date(log.date);
+    const year = date.getFullYear().toString() + '年';
+    const month = (date.getMonth() + 1).toString() + '月';
+    const day = date.getDate().toString() + '日';
+    
+    if (!acc[year]) acc[year] = {};
+    if (!acc[year][month]) acc[year][month] = {};
+    if (!acc[year][month][day]) acc[year][month][day] = [];
+    acc[year][month][day].push(log);
     return acc;
   }, {});
 
@@ -734,7 +1102,7 @@ export default function App() {
       {/* Header */}
       <header className="px-8 py-12 max-w-3xl mx-auto">
         <div className="mb-8">
-          <p className="text-[10px] font-bold text-black/20 uppercase tracking-[0.3em] italic mb-1">Daily Inspiration</p>
+          <p className="text-[10px] font-bold text-black/20 uppercase tracking-[0.3em] italic mb-1">每日灵感</p>
           <p className="text-sm font-serif text-black/60 italic">“ {slogan} ”</p>
         </div>
         <div className="flex justify-between items-end">
@@ -744,7 +1112,7 @@ export default function App() {
           </div>
           <div className="text-right">
             <p className="text-3xl font-mono font-light leading-none">{items.length}</p>
-            <p className="text-[9px] text-black/30 font-bold uppercase tracking-widest mt-1">Items in Stock</p>
+            <p className="text-[9px] text-black/30 font-bold uppercase tracking-widest mt-1">持有物品</p>
           </div>
         </div>
       </header>
@@ -765,7 +1133,7 @@ export default function App() {
                   <input 
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Search items..." 
+                    placeholder="搜索物品..." 
                     className="w-full bg-transparent border-b border-black/5 pl-6 py-2 text-sm focus:outline-none focus:border-black/20 transition-all"
                   />
                 </div>
@@ -776,7 +1144,7 @@ export default function App() {
                   }}
                   className="text-xs font-bold uppercase tracking-widest hover:opacity-50 transition-opacity"
                 >
-                  Add Item
+                  添加物品
                 </button>
               </div>
 
@@ -833,7 +1201,76 @@ export default function App() {
                 
                 {hesitationItems.length === 0 && (
                   <div className="py-32 text-center text-black/20">
-                    <p className="text-sm italic font-serif">No items in hesitation. Clear mind.</p>
+                    <p className="text-sm italic font-serif">犹豫区空空如也。心境清明。</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'shopping' && (
+            <motion.div 
+              key="shopping"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="space-y-12"
+            >
+              <div className="flex justify-between items-end">
+                <div className="space-y-4">
+                  <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">购物清单</h2>
+                  <p className="text-sm text-black/40 italic font-serif">三思而后买。</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setEditingWishlistItem(null);
+                    setIsWishlistModalOpen(true);
+                  }}
+                  className="text-xs font-bold uppercase tracking-widest hover:opacity-50 transition-opacity"
+                >
+                  添加心愿
+                </button>
+              </div>
+
+              <div className="space-y-12">
+                <div className="space-y-4">
+                  <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-black/10 border-b border-black/[0.03] pb-2">考虑中</h3>
+                  <div className="divide-y divide-black/[0.03]">
+                    {wishlist.filter(i => i.status === 'considering').map(item => (
+                      <WishlistItemCard 
+                        key={item.id} 
+                        item={item} 
+                        onEdit={(item) => {
+                          setEditingWishlistItem(item);
+                          setIsWishlistModalOpen(true);
+                        }}
+                        onStatusChange={handleWishlistStatusChange}
+                      />
+                    ))}
+                    {wishlist.filter(i => i.status === 'considering').length === 0 && (
+                      <div className="py-12 text-center text-black/10">
+                        <p className="text-xs italic font-serif">暂无考虑中的物品。</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {wishlist.some(i => i.status === 'abandoned') && (
+                  <div className="space-y-4">
+                    <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-black/10 border-b border-black/[0.03] pb-2">已放弃购买</h3>
+                    <div className="divide-y divide-black/[0.03]">
+                      {wishlist.filter(i => i.status === 'abandoned').map(item => (
+                        <WishlistItemCard 
+                          key={item.id} 
+                          item={item} 
+                          onEdit={(item) => {
+                            setEditingWishlistItem(item);
+                            setIsWishlistModalOpen(true);
+                          }}
+                          onStatusChange={handleWishlistStatusChange}
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -850,50 +1287,75 @@ export default function App() {
             >
               <div className="grid grid-cols-2 gap-12">
                 <div>
-                  <p className="text-[9px] font-bold text-black/30 uppercase tracking-widest mb-4">Total Value</p>
+                  <p className="text-[9px] font-bold text-black/30 uppercase tracking-widest mb-4">总资产估值</p>
                   <p className="text-4xl font-mono font-light">¥{totalValue.toLocaleString()}</p>
                 </div>
                 <div>
-                  <p className="text-[9px] font-bold text-black/30 uppercase tracking-widest mb-4">Categories</p>
+                  <p className="text-[9px] font-bold text-black/30 uppercase tracking-widest mb-4">分类数量</p>
                   <p className="text-4xl font-mono font-light">{Object.keys(groupedItems).length}</p>
                 </div>
               </div>
 
               <div className="flex justify-between items-center">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">Summary</h3>
+                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">断舍离成果</h3>
                 <button 
                   onClick={exportToCSV}
                   className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-black/40 hover:text-black transition-all"
                 >
                   <Download size={14} />
-                  Export CSV
+                  导出 CSV
                 </button>
               </div>
 
               <div className="grid grid-cols-3 gap-4">
                 <button onClick={() => showDetails('discarded')} className="bg-black/[0.02] p-4 text-center hover:bg-black/[0.05] transition-all">
-                  <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">Discarded</p>
+                  <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">已丢弃</p>
                   <p className="text-xl font-mono">{stats.summary.discarded}</p>
                 </button>
                 <button onClick={() => showDetails('gifted')} className="bg-black/[0.02] p-4 text-center hover:bg-black/[0.05] transition-all">
-                  <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">Gifted</p>
+                  <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">已转赠</p>
                   <p className="text-xl font-mono">{stats.summary.gifted}</p>
                 </button>
                 <button onClick={() => showDetails('sold')} className="bg-black/[0.02] p-4 text-center hover:bg-black/[0.05] transition-all">
-                  <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">Sold</p>
+                  <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">已转卖</p>
                   <p className="text-xl font-mono">{stats.summary.sold}</p>
                 </button>
               </div>
 
               {stats.summary.soldValue > 0 && (
                 <div className="bg-emerald-50/50 p-6 border border-emerald-100/50">
-                   <p className="text-[9px] font-bold text-emerald-600/60 uppercase tracking-widest mb-1">Total Recovery</p>
+                   <p className="text-[9px] font-bold text-emerald-600/60 uppercase tracking-widest mb-1">回血总额</p>
                    <p className="text-3xl font-mono text-emerald-700">¥{stats.summary.soldValue.toLocaleString()}</p>
                 </div>
               )}
 
               <div className="space-y-8">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">Inventory Trend</h3>
+                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">断舍离成就</h3>
+                <div className="bg-black/[0.02] p-8 space-y-6">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-full bg-black flex items-center justify-center text-white">
+                      <Heart size={20} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">您已经成功告别了 {stats.summary.discarded + stats.summary.gifted + stats.summary.sold} 件物品</p>
+                      <p className="text-[10px] text-black/40">每一件物品的离开，都为您腾出了更多的生活空间。</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 pt-4 border-t border-black/5">
+                    <div>
+                      <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">释放空间估算</p>
+                      <p className="text-lg font-mono">{(stats.summary.discarded + stats.summary.gifted + stats.summary.sold) * 0.05} m³</p>
+                    </div>
+                    <div>
+                      <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest mb-1">减少心理负担</p>
+                      <p className="text-lg font-mono">Significant</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-8">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">持有量趋势</h3>
                 <div className="h-[240px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={trendData}>
@@ -918,13 +1380,13 @@ export default function App() {
               </div>
 
               <div className="space-y-8">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">Category Distribution</h3>
+                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">分类占比</h3>
                 <div className="space-y-4">
                   {(stats.categoryStats as CategoryStat[]).sort((a, b) => b.count - a.count).map((stat) => (
                     <div key={stat.category} className="space-y-1">
                       <div className="flex justify-between text-[10px] font-mono uppercase text-black/40">
                         <span>{stat.category}</span>
-                        <span>{stat.count} items</span>
+                        <span>{stat.count} 件</span>
                       </div>
                       <div className="h-1 bg-black/[0.03] overflow-hidden">
                         <motion.div 
@@ -946,18 +1408,66 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="space-y-16"
+              className="space-y-16 pb-20"
             >
               <div className="space-y-8">
-                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">Category Management</h2>
+                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">断舍离日志</h2>
+                <div className="space-y-4">
+                  {Object.entries(groupedLogs).sort((a, b) => b[0].localeCompare(a[0])).map(([year, months]: [string, any]) => (
+                    <CollapsibleLogSection key={year} title={year}>
+                      {Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).map(([month, days]: [string, any]) => (
+                        <CollapsibleLogSection key={month} title={month} level={1}>
+                          {Object.entries(days).sort((a, b) => b[0].localeCompare(a[0])).map(([day, dayLogs]: [string, any]) => (
+                            <CollapsibleLogSection key={day} title={day} level={2}>
+                              <div className="space-y-4 pt-2">
+                                {dayLogs.map((log: Log) => {
+                                  const actionLabels: Record<string, string> = {
+                                    add: '+ 新增',
+                                    discard: '- 丢弃',
+                                    keep: '✓ 保留',
+                                    gift: '- 转赠',
+                                    sell: '- 转卖'
+                                  };
+                                  return (
+                                    <div key={log.id} className="flex gap-4 group pl-2">
+                                      <div className="flex-1 border-l border-black/[0.03] pl-4">
+                                        <div className="flex items-center gap-3">
+                                          <span className={cn(
+                                            "text-[9px] font-bold uppercase tracking-widest",
+                                            log.action === 'add' ? "text-black" : "text-black/30"
+                                          )}>
+                                            {actionLabels[log.action] || log.action}
+                                          </span>
+                                          <span className="text-xs font-medium">{log.item_name}</span>
+                                        </div>
+                                        {log.note && (
+                                          <p className="text-[9px] text-black/20 mt-0.5 font-mono">{log.note}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </CollapsibleLogSection>
+                          ))}
+                        </CollapsibleLogSection>
+                      ))}
+                    </CollapsibleLogSection>
+                  ))}
+                  {logs.length === 0 && <p className="text-sm italic text-black/20">暂无日志。</p>}
+                </div>
+              </div>
+
+              <div className="space-y-8">
+                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">分类管理</h2>
                 <div className="flex gap-4">
                   <input 
                     value={newCategoryName}
                     onChange={e => setNewCategoryName(e.target.value)}
-                    placeholder="New Category Name"
+                    placeholder="新分类名称"
                     className="flex-1 minimal-input"
                   />
-                  <button onClick={addCategory} className="minimal-button">Add</button>
+                  <button onClick={addCategory} className="minimal-button">添加</button>
                 </div>
                 <div className="space-y-2">
                   {categories.map(cat => (
@@ -975,86 +1485,50 @@ export default function App() {
               </div>
 
               <div className="space-y-8">
-                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">Data Management</h2>
+                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">数据管理</h2>
                 <div className="grid grid-cols-2 gap-4">
-                  <button onClick={exportToJSON} className="minimal-button py-3 text-[10px]">Backup JSON</button>
+                  <button onClick={exportToJSON} className="minimal-button py-3 text-[10px]">备份 JSON</button>
                   <label className="minimal-button py-3 text-[10px] text-center cursor-pointer">
-                    Restore JSON
+                    还原 JSON
                     <input type="file" accept=".json" onChange={importFromJSON} className="hidden" />
                   </label>
                 </div>
-                <p className="text-[9px] text-black/20 italic">Note: Data is stored locally in your browser. Use Backup/Restore to move data between devices.</p>
+                <p className="text-[9px] text-black/20 italic">注：数据存储在您的浏览器本地。使用备份/还原功能可在不同设备间迁移数据。</p>
               </div>
 
               <div className="space-y-8">
-                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">App Info</h2>
+                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">关于应用</h2>
                 <div className="p-8 border border-black/5 text-center space-y-4">
                   <p className="text-3xl font-serif font-bold">简.</p>
-                  <p className="text-xs text-black/30">Version 2.0.0</p>
-                  <p className="text-[10px] text-black/20 uppercase tracking-widest">Minimalist Inventory Management</p>
+                  <p className="text-xs text-black/30">版本 2.0.0</p>
+                  <p className="text-[10px] text-black/20 uppercase tracking-widest">极简主义物品管理</p>
                 </div>
               </div>
             </motion.div>
           )}
 
-          {activeTab === 'logs' && (
-            <motion.div 
-              key="logs"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="space-y-16"
-            >
-              {(Object.entries(groupedLogs) as [string, Log[]][]).map(([month, monthLogs]) => (
-                <div key={month} className="space-y-8">
-                  <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20 sticky top-0 bg-white/80 backdrop-blur-sm py-4 z-10">{month}</h2>
-                  <div className="space-y-6">
-                    {monthLogs.map((log) => {
-                      const actionLabels: Record<string, string> = {
-                        add: '+ Added',
-                        discard: '- Discarded',
-                        keep: '✓ Kept',
-                        gift: '- Gifted',
-                        sell: '- Sold'
-                      };
-                      return (
-                        <div key={log.id} className="flex gap-6 group">
-                          <div className="w-12 text-[10px] font-mono text-black/20 pt-1">
-                            {format(new Date(log.date), 'MM.dd')}
-                          </div>
-                          <div className="flex-1 border-l border-black/[0.03] pl-6 pb-6">
-                            <div className="flex items-center gap-3">
-                              <span className={cn(
-                                "text-[10px] font-bold uppercase tracking-widest",
-                                log.action === 'add' ? "text-black" : "text-black/30"
-                              )}>
-                                {actionLabels[log.action] || log.action}
-                              </span>
-                              <span className="text-sm font-medium">{log.item_name}</span>
-                            </div>
-                            {log.note && (
-                              <p className="text-[10px] text-black/20 mt-1 font-mono">{log.note}</p>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-              
-              {logs.length === 0 && (
-                <div className="py-32 text-center text-black/20 italic font-serif">
-                  No history recorded yet.
-                </div>
-              )}
-            </motion.div>
-          )}
         </AnimatePresence>
       </main>
 
       <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
       
+      <ItemModal 
+        isOpen={isModalOpen} 
+        onClose={() => setIsModalOpen(false)} 
+        onSave={fetchData}
+        onDiscard={handleDiscard}
+        item={editingItem}
+        categories={categories}
+      />
+
+      <WishlistModal
+        isOpen={isWishlistModalOpen}
+        onClose={() => setIsWishlistModalOpen(false)}
+        onSave={fetchData}
+        item={editingWishlistItem}
+        categories={categories}
+      />
+
       {/* Action Confirmation Modal */}
       <AnimatePresence>
         {pendingAction && (
@@ -1096,7 +1570,7 @@ export default function App() {
                     <input 
                       id="recipient-input"
                       className="minimal-input" 
-                      placeholder="Recipient name"
+                      placeholder="接收人姓名"
                       autoFocus
                     />
                   </div>
@@ -1150,15 +1624,6 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-      
-      <ItemModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        onSave={fetchData}
-        onDiscard={handleDiscard}
-        item={editingItem}
-        categories={categories}
-      />
 
       {/* Detail View Modal */}
       <AnimatePresence>
@@ -1194,12 +1659,12 @@ export default function App() {
                     </div>
                     <div className="flex gap-4 text-[10px] font-mono text-black/40 uppercase">
                       <span>{item.category}</span>
-                      {item.recipient && <span>To: {item.recipient}</span>}
-                      {item.selling_price && <span>Price: ¥{item.selling_price}</span>}
+                      {item.recipient && <span>接收人: {item.recipient}</span>}
+                      {item.selling_price && <span>成交价: ¥{item.selling_price}</span>}
                     </div>
                   </div>
                 ))}
-                {detailItems.length === 0 && <p className="text-center py-12 text-black/20 italic">No records found.</p>}
+                {detailItems.length === 0 && <p className="text-center py-12 text-black/20 italic">暂无记录。</p>}
               </div>
             </motion.div>
           </div>

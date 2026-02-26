@@ -36,6 +36,32 @@ export interface Category {
   created_at: string;
 }
 
+export interface PriceComparison {
+  platform: string;
+  price: number;
+}
+
+export interface WishlistLog {
+  id: number;
+  date: string;
+  action: string;
+}
+
+export interface WishlistItem {
+  id: number;
+  name: string;
+  category: string;
+  prices: PriceComparison[];
+  reason_to_buy: string;
+  reason_to_quit: string;
+  pros: string;
+  cons: string;
+  status: 'considering' | 'purchased' | 'abandoned';
+  desire_level: number; // 1-5
+  logs: WishlistLog[];
+  created_at: string;
+}
+
 export interface HistoryPoint {
   date: string;
   change: number;
