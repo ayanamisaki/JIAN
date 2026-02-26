@@ -43,6 +43,57 @@ const SLOGANS = [
   "物品不应成为负担，而应是生活的助力。"
 ];
 
+// --- Storage Helpers ---
+
+const STORAGE_KEYS = {
+  ITEMS: 'jian_items_v2',
+  LOGS: 'jian_logs_v2',
+  CATEGORIES: 'jian_categories_v2'
+};
+
+const storage = {
+  getItems: (): Item[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.ITEMS) || '[]'),
+  setItems: (items: Item[]) => localStorage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(items)),
+  getLogs: (): Log[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.LOGS) || '[]'),
+  setLogs: (logs: Log[]) => localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(logs)),
+  getCategories: (): Category[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.CATEGORIES) || '[]'),
+  setCategories: (categories: Category[]) => localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories)),
+};
+
+const calculateStats = (items: Item[], logs: Log[]) => {
+  const activeItems = items.filter(i => i.status === 'active');
+  const categoryStats = Object.entries(
+    activeItems.reduce((acc: Record<string, {count: number, total_value: number}>, item) => {
+      const cat = item.category || '未分类';
+      if (!acc[cat]) acc[cat] = { count: 0, total_value: 0 };
+      acc[cat].count++;
+      acc[cat].total_value += item.price;
+      return acc;
+    }, {})
+  ).map(([category, stats]) => ({ category, ...stats }));
+
+  const summary = {
+    discarded: items.filter(i => i.status === 'discarded').length,
+    gifted: items.filter(i => i.status === 'gifted').length,
+    sold: items.filter(i => i.status === 'sold').length,
+    soldValue: items.filter(i => i.status === 'sold').reduce((sum, i) => sum + (i.selling_price || 0), 0)
+  };
+
+  const historyMap = logs.reduce((acc: Record<string, number>, log) => {
+    const date = log.date;
+    if (!acc[date]) acc[date] = 0;
+    if (log.action === 'add') acc[date]++;
+    else if (['discard', 'gift', 'sell'].includes(log.action)) acc[date]--;
+    return acc;
+  }, {});
+
+  const history = Object.entries(historyMap)
+    .map(([date, change]) => ({ date, change }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  return { categoryStats, history, summary };
+};
+
 // --- Components ---
 
 const Navbar: React.FC<{ activeTab: string, setActiveTab: (t: string) => void }> = ({ activeTab, setActiveTab }) => {
@@ -255,19 +306,40 @@ const ItemModal: React.FC<{
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const url = item ? `/api/items/${item.id}` : '/api/items';
-    const method = item ? 'PUT' : 'POST';
-    
-    await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...formData,
-        purchase_date: dateMode === 'exact' ? formData.purchase_date : null,
-        fuzzy_date: dateMode === 'fuzzy' ? formData.fuzzy_date : null,
-        price: parseFloat(formData.price) || 0
-      })
-    });
+    const data = {
+      ...formData,
+      purchase_date: dateMode === 'exact' ? formData.purchase_date : null,
+      fuzzy_date: dateMode === 'fuzzy' ? formData.fuzzy_date : null,
+      price: parseFloat(formData.price) || 0
+    };
+
+    const allItems = storage.getItems();
+    const allLogs = storage.getLogs();
+    const now = new Date().toISOString().split('T')[0];
+
+    if (item) {
+      const updatedItems = allItems.map(i => i.id === item.id ? { ...i, ...data, is_hesitation: data.is_hesitation ? 1 : 0 } : i);
+      storage.setItems(updatedItems);
+    } else {
+      const newItem: Item = {
+        ...data,
+        id: Date.now(),
+        is_hesitation: data.is_hesitation ? 1 : 0,
+        status: 'active',
+        created_at: new Date().toISOString()
+      };
+      storage.setItems([...allItems, newItem]);
+      
+      const newLog: Log = {
+        id: Date.now() + 1,
+        item_id: newItem.id,
+        action: 'add',
+        item_name: newItem.name,
+        date: now
+      };
+      storage.setLogs([...allLogs, newLog]);
+    }
+
     onSave();
     onClose();
   };
@@ -456,17 +528,15 @@ export default function App() {
     itemName: string;
   } | null>(null);
 
-  const fetchData = async () => {
-    const [itemsRes, logsRes, statsRes, categoriesRes] = await Promise.all([
-      fetch('/api/items'),
-      fetch('/api/logs'),
-      fetch('/api/stats'),
-      fetch('/api/categories')
-    ]);
-    setItems(await itemsRes.json());
-    setLogs(await logsRes.json());
-    setStats(await statsRes.json());
-    setCategories(await categoriesRes.json());
+  const fetchData = () => {
+    const localItems = storage.getItems();
+    const localLogs = storage.getLogs();
+    const localCategories = storage.getCategories();
+    
+    setItems(localItems.filter(i => i.status === 'active'));
+    setLogs(localLogs);
+    setCategories(localCategories);
+    setStats(calculateStats(localItems, localLogs));
   };
 
   useEffect(() => {
@@ -478,14 +548,16 @@ export default function App() {
   };
 
   const handleDiscard = (id: number) => {
-    const item = items.find(i => i.id === id);
+    const allItems = storage.getItems();
+    const item = allItems.find(i => i.id === id);
     if (item) {
       setPendingAction({ id, type: 'discard', itemName: item.name });
     }
   };
 
   const handleHesitationAction = (id: number, action: string) => {
-    const item = items.find(i => i.id === id);
+    const allItems = storage.getItems();
+    const item = allItems.find(i => i.id === id);
     if (item) {
       setPendingAction({ id, type: action as any, itemName: item.name });
     }
@@ -494,54 +566,75 @@ export default function App() {
   const executePendingAction = async (extraData?: { recipient?: string, selling_price?: number }) => {
     if (!pendingAction) return;
     const { id, type } = pendingAction;
+    const allItems = storage.getItems();
+    const allLogs = storage.getLogs();
+    const now = new Date().toISOString().split('T')[0];
+    const item = allItems.find(i => i.id === id);
 
-    try {
-      if (type === 'delete') {
-        await fetch(`/api/items/${id}`, { method: 'DELETE' });
-      } else if (type === 'discard') {
-        await fetch(`/api/items/${id}/discard`, { method: 'POST' });
-      } else {
-        await fetch(`/api/items/${id}/hesitation-action`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: type, ...extraData })
-        });
-      }
-      setPendingAction(null);
-      fetchData();
-    } catch (error) {
-      console.error('Action failed:', error);
-      alert('操作失败，请重试');
+    if (!item) return;
+
+    if (type === 'delete') {
+      storage.setItems(allItems.filter(i => i.id !== id));
+      storage.setLogs(allLogs.filter(l => l.item_id !== id));
+    } else if (type === 'discard') {
+      storage.setItems(allItems.map(i => i.id === id ? { ...i, status: 'discarded', removed_date: now } : i));
+      storage.setLogs([...allLogs, { id: Date.now(), item_id: id, action: 'discard', item_name: item.name, date: now }]);
+    } else if (type === 'keep') {
+      storage.setItems(allItems.map(i => i.id === id ? { ...i, is_hesitation: 0 } : i));
+      storage.setLogs([...allLogs, { id: Date.now(), item_id: id, action: 'keep', item_name: item.name, date: now }]);
+    } else {
+      const statusMap: Record<string, string> = { gift: 'gifted', sell: 'sold' };
+      storage.setItems(allItems.map(i => i.id === id ? { 
+        ...i, 
+        status: statusMap[type] as any, 
+        removed_date: now,
+        recipient: extraData?.recipient || null,
+        selling_price: extraData?.selling_price || null
+      } : i));
+      
+      storage.setLogs([...allLogs, { 
+        id: Date.now(), 
+        item_id: id, 
+        action: type as any, 
+        item_name: item.name, 
+        date: now,
+        note: extraData?.recipient ? `赠予: ${extraData.recipient}` : (extraData?.selling_price ? `售价: ¥${extraData.selling_price}` : null)
+      }]);
     }
+
+    setPendingAction(null);
+    fetchData();
   };
 
-  const showDetails = async (status: string) => {
-    const res = await fetch(`/api/items/archived/${status}`);
-    setDetailItems(await res.json());
+  const showDetails = (status: string) => {
+    const allItems = storage.getItems();
+    setDetailItems(allItems.filter(i => i.status === status).sort((a, b) => (b.removed_date || '').localeCompare(a.removed_date || '')));
     setDetailView(status);
   };
 
-  const addCategory = async () => {
+  const addCategory = () => {
     if (!newCategoryName) return;
-    await fetch('/api/categories', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newCategoryName })
-    });
+    const allCats = storage.getCategories();
+    if (allCats.some(c => c.name === newCategoryName)) {
+      alert('分类已存在');
+      return;
+    }
+    storage.setCategories([...allCats, { id: Date.now(), name: newCategoryName, created_at: new Date().toISOString() }]);
     setNewCategoryName('');
     fetchData();
   };
 
-  const deleteCategory = async (id: number) => {
+  const deleteCategory = (id: number) => {
     if (confirm('确定要删除这个分类吗？')) {
-      await fetch(`/api/categories/${id}`, { method: 'DELETE' });
+      const allCats = storage.getCategories();
+      storage.setCategories(allCats.filter(c => c.id !== id));
       fetchData();
     }
   };
 
-  const exportToCSV = async () => {
-    const res = await fetch('/api/export');
-    const data = await res.json();
+  const exportToCSV = () => {
+    const data = storage.getItems();
+    // ... same CSV logic ...
     
     const headers = ['ID', '名称', '分类', '金额', '购买日期', '模糊日期', '位置', '状态', '断舍离日期', '售价', '接收人', '备注'];
     const rows = data.map((item: Item) => [
@@ -569,6 +662,43 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const exportToJSON = () => {
+    const data = {
+      items: storage.getItems(),
+      logs: storage.getLogs(),
+      categories: storage.getCategories()
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `jian_backup_${format(new Date(), 'yyyyMMdd')}.json`;
+    link.click();
+  };
+
+  const importFromJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.items && data.logs && data.categories) {
+          storage.setItems(data.items);
+          storage.setLogs(data.logs);
+          storage.setCategories(data.categories);
+          fetchData();
+          alert('导入成功');
+        } else {
+          alert('无效的备份文件');
+        }
+      } catch (err) {
+        alert('解析失败');
+      }
+    };
+    reader.readAsText(file);
   };
 
   const filteredItems = items.filter(item => 
@@ -842,6 +972,18 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              <div className="space-y-8">
+                <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">Data Management</h2>
+                <div className="grid grid-cols-2 gap-4">
+                  <button onClick={exportToJSON} className="minimal-button py-3 text-[10px]">Backup JSON</button>
+                  <label className="minimal-button py-3 text-[10px] text-center cursor-pointer">
+                    Restore JSON
+                    <input type="file" accept=".json" onChange={importFromJSON} className="hidden" />
+                  </label>
+                </div>
+                <p className="text-[9px] text-black/20 italic">Note: Data is stored locally in your browser. Use Backup/Restore to move data between devices.</p>
               </div>
 
               <div className="space-y-8">
