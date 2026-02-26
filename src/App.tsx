@@ -213,7 +213,7 @@ const ItemCard: React.FC<{ item: Item, onEdit: (item: Item) => void, onDelete: (
             e.stopPropagation();
             onDelete(item.id);
           }}
-          className="p-2 text-black/10 hover:text-red-500 hover:bg-red-50 rounded-full transition-all opacity-0 group-hover:opacity-100"
+          className="p-2 text-black/20 md:text-black/10 hover:text-red-500 hover:bg-red-50 rounded-full transition-all opacity-100 md:opacity-0 md:group-hover:opacity-100"
         >
           <Trash2 size={16} />
         </button>
@@ -1498,7 +1498,7 @@ export default function App() {
                       <span className="text-sm">{cat.name}</span>
                       <button 
                         onClick={() => deleteCategory(cat.id)}
-                        className="p-2 text-black/10 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                        className="p-2 text-black/20 md:text-black/10 hover:text-red-500 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all"
                       >
                         <Trash2 size={16} />
                       </button>
