@@ -9,7 +9,7 @@ import {
   ChevronRight, 
   Calendar, 
   MapPin, 
-  DollarSign,
+  JapaneseYen,
   AlertCircle,
   AlertTriangle,
   Check,
@@ -199,7 +199,7 @@ const ItemCard: React.FC<{ item: Item, onEdit: (item: Item) => void, onDelete: (
         </div>
         <div className="flex items-center gap-4 text-xs text-black/30 font-mono">
           <span className="flex items-center gap-1"><MapPin size={10} /> {item.location || '无'}</span>
-          <span className="flex items-center gap-1"><DollarSign size={10} /> {item.price.toLocaleString()}</span>
+          <span className="flex items-center gap-1"><JapaneseYen size={10} /> {item.price.toLocaleString()}</span>
         </div>
       </div>
 
@@ -246,7 +246,7 @@ const HesitationItemCard: React.FC<{ item: Item, onAction: (id: number, action: 
           <h3 className="text-lg font-medium text-black/90 truncate">{item.name}</h3>
           <div className="flex items-center gap-4 text-xs text-black/30 font-mono mt-1">
             <span className="flex items-center gap-1"><MapPin size={10} /> {item.location || '无'}</span>
-            <span className="flex items-center gap-1"><DollarSign size={10} /> {item.price.toLocaleString()}</span>
+            <span className="flex items-center gap-1"><JapaneseYen size={10} /> {item.price.toLocaleString()}</span>
             <span className="flex items-center gap-1"><Calendar size={10} /> {holdingTimeStr}</span>
           </div>
         </div>
@@ -573,7 +573,7 @@ const WishlistItemCard: React.FC<{
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-4 text-[10px] text-black/30 font-mono uppercase tracking-widest">
+          <div className="flex items-center gap-4 text-black/30 font-mono uppercase tracking-widest text-[10px]">
             <span>{item.category || '未分类'}</span>
             <span>已加入 {daysOnList} 天</span>
             {isAbandoned && <span className="text-red-400 font-bold">已放弃</span>}
@@ -751,23 +751,32 @@ const WishlistModal: React.FC<{
                 价格比对 
                 <button type="button" onClick={() => setFormData({...formData, prices: [...formData.prices, { platform: '', price: 0 }]})} className="text-black hover:opacity-50 transition-opacity"><Plus size={12} /></button>
               </label>
-              {formData.prices.map((p, idx) => (
-                <div key={idx} className="flex gap-4">
-                  <input value={p.platform} onChange={e => {
-                    const newPrices = [...formData.prices];
-                    newPrices[idx].platform = e.target.value;
-                    setFormData({...formData, prices: newPrices});
-                  }} className="flex-1 minimal-input text-xs" placeholder="平台 (如：淘宝)" />
-                  <input type="number" value={p.price || ''} onChange={e => {
-                    const newPrices = [...formData.prices];
-                    newPrices[idx].price = parseFloat(e.target.value) || 0;
-                    setFormData({...formData, prices: newPrices});
-                  }} className="w-24 minimal-input text-xs font-mono" placeholder="价格" />
-                  {formData.prices.length > 1 && (
-                    <button type="button" onClick={() => setFormData({...formData, prices: formData.prices.filter((_, i) => i !== idx)})} className="text-black/20 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
-                  )}
-                </div>
-              ))}
+              <div className="space-y-2">
+                {formData.prices.map((p, idx) => (
+                  <div key={idx} className="flex gap-3 items-center bg-black/[0.02] p-3 border border-black/[0.05]">
+                    <div className="flex-1 space-y-1">
+                      <label className="text-[8px] font-bold text-black/20 uppercase tracking-tighter">价格 (¥)</label>
+                      <input type="number" value={p.price || ''} onChange={e => {
+                        const newPrices = [...formData.prices];
+                        newPrices[idx].price = parseFloat(e.target.value) || 0;
+                        setFormData({...formData, prices: newPrices});
+                      }} className="w-full bg-transparent border-none p-0 text-sm font-mono focus:ring-0" placeholder="0.00" />
+                    </div>
+                    <div className="w-px h-8 bg-black/5" />
+                    <div className="flex-[2] space-y-1">
+                      <label className="text-[8px] font-bold text-black/20 uppercase tracking-tighter">平台 / 渠道</label>
+                      <input value={p.platform} onChange={e => {
+                        const newPrices = [...formData.prices];
+                        newPrices[idx].platform = e.target.value;
+                        setFormData({...formData, prices: newPrices});
+                      }} className="w-full bg-transparent border-none p-0 text-sm focus:ring-0" placeholder="例如：淘宝、京东" />
+                    </div>
+                    {formData.prices.length > 1 && (
+                      <button type="button" onClick={() => setFormData({...formData, prices: formData.prices.filter((_, i) => i !== idx)})} className="p-2 text-black/10 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-6">
@@ -833,6 +842,7 @@ export default function App() {
     type: 'delete' | 'discard' | 'gift' | 'sell' | 'keep';
     itemName: string;
   } | null>(null);
+  const [pendingWishlistPurchase, setPendingWishlistPurchase] = useState<WishlistItem | null>(null);
 
   const fetchData = () => {
     const localItems = storage.getItems();
@@ -977,50 +987,63 @@ export default function App() {
     const item = allWishlist.find(i => i.id === id);
     if (!item) return;
 
+    if (status === 'purchased') {
+      setPendingWishlistPurchase(item);
+      return;
+    }
+
     const now = new Date().toISOString();
     const dateStr = now.split('T')[0];
 
-    if (status === 'purchased') {
-      // Move to items
-      const minPrice = item.prices.length > 0 ? Math.min(...item.prices.map(p => p.price)) : 0;
-      const newItem: Item = {
-        id: Date.now(),
-        name: item.name,
-        category: item.category,
-        price: minPrice,
-        purchase_date: dateStr,
-        fuzzy_date: null,
-        location: '',
-        status: 'active',
-        is_hesitation: 0,
-        notes: `From Wishlist. Reason: ${item.reason_to_buy}`,
-        created_at: now
-      };
-      
-      const allItems = storage.getItems();
-      storage.setItems([...allItems, newItem]);
-      
-      const allLogs = storage.getLogs();
-      storage.setLogs([...allLogs, { 
-        id: Date.now() + 1, 
-        item_id: newItem.id, 
-        action: 'add', 
-        item_name: newItem.name, 
-        date: dateStr,
-        note: '从心愿单购入'
-      }]);
+    // Just update status
+    const updated = allWishlist.map(i => i.id === id ? { 
+      ...i, 
+      status, 
+      logs: [...i.logs, { id: Date.now(), date: dateStr, action: `状态变更: ${status}` }] 
+    } : i);
+    storage.setWishlist(updated);
+    fetchData();
+  };
 
-      // Remove from wishlist
-      storage.setWishlist(allWishlist.filter(i => i.id !== id));
-    } else {
-      // Just update status
-      const updated = allWishlist.map(i => i.id === id ? { 
-        ...i, 
-        status, 
-        logs: [...i.logs, { id: Date.now(), date: dateStr, action: `状态变更: ${status}` }] 
-      } : i);
-      storage.setWishlist(updated);
-    }
+  const executeWishlistPurchase = (purchasePrice?: number, channel?: string) => {
+    if (!pendingWishlistPurchase) return;
+    const item = pendingWishlistPurchase;
+    const allWishlist = storage.getWishlist();
+    const now = new Date().toISOString();
+    const dateStr = now.split('T')[0];
+
+    // Move to items
+    const finalPrice = purchasePrice !== undefined ? purchasePrice : (item.prices.length > 0 ? Math.min(...item.prices.map(p => p.price)) : 0);
+    const newItem: Item = {
+      id: Date.now(),
+      name: item.name,
+      category: item.category,
+      price: finalPrice,
+      purchase_date: dateStr,
+      fuzzy_date: null,
+      location: channel || '',
+      status: 'active',
+      is_hesitation: 0,
+      notes: `从心愿单购入。原因: ${item.reason_to_buy}${channel ? `。渠道: ${channel}` : ''}`,
+      created_at: now
+    };
+    
+    const allItems = storage.getItems();
+    storage.setItems([...allItems, newItem]);
+    
+    const allLogs = storage.getLogs();
+    storage.setLogs([...allLogs, { 
+      id: Date.now() + 1, 
+      item_id: newItem.id, 
+      action: 'add', 
+      item_name: newItem.name, 
+      date: dateStr,
+      note: '从心愿单购入'
+    }]);
+
+    // Remove from wishlist
+    storage.setWishlist(allWishlist.filter(i => i.id !== item.id));
+    setPendingWishlistPurchase(null);
     fetchData();
   };
 
@@ -1617,6 +1640,81 @@ export default function App() {
                     className="flex-1 py-3 text-xs font-bold uppercase tracking-widest bg-black text-white hover:bg-black/80 transition-all"
                   >
                     确认
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Wishlist Purchase Confirmation Modal */}
+      <AnimatePresence>
+        {pendingWishlistPurchase && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setPendingWishlistPurchase(null)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-sm bg-white rounded-none shadow-2xl p-8"
+            >
+              <div className="flex items-center gap-4 mb-6 text-emerald-500">
+                <ShoppingBag size={24} />
+                <h3 className="text-xl font-serif font-bold text-black">确认购入</h3>
+              </div>
+              
+              <p className="text-sm text-black/60 mb-8 leading-relaxed">
+                恭喜！您已决定购入 <span className="font-bold text-black">“{pendingWishlistPurchase.name}”</span>。
+                请记录最终的成交信息（可选）：
+              </p>
+
+              <div className="space-y-6">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">买入价 (¥)</label>
+                  <input 
+                    id="purchase-price-input"
+                    type="number"
+                    className="minimal-input" 
+                    placeholder={Math.min(...pendingWishlistPurchase.prices.map(p => p.price)).toString()}
+                    autoFocus
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">购入渠道</label>
+                  <input 
+                    id="purchase-channel-input"
+                    className="minimal-input" 
+                    placeholder="例如：淘宝、线下店等"
+                  />
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <button 
+                    onClick={() => setPendingWishlistPurchase(null)}
+                    className="flex-1 py-3 text-xs font-bold uppercase tracking-widest text-black/40 hover:bg-black/5 transition-all"
+                  >
+                    取消
+                  </button>
+                  <button 
+                    onClick={() => {
+                      const price = (document.getElementById('purchase-price-input') as HTMLInputElement)?.value;
+                      const channel = (document.getElementById('purchase-channel-input') as HTMLInputElement)?.value;
+                      
+                      executeWishlistPurchase(
+                        price ? parseFloat(price) : undefined,
+                        channel || undefined
+                      );
+                    }}
+                    className="flex-1 py-3 text-xs font-bold uppercase tracking-widest bg-black text-white hover:bg-black/80 transition-all"
+                  >
+                    确认购入
                   </button>
                 </div>
               </div>

@@ -1,5 +1,5 @@
 {
-  "name": "简 (Jian) - 极简物品管理",
+  "name": "简",
   "description": "一个专注于物品登记、分类统计与断舍离记录的极简主义生活工具。支持自动持有时间计算、犹豫区管理及增减趋势分析。",
   "requestFramePermissions": []
 }
