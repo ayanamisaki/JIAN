@@ -7,6 +7,7 @@ import {
   Search, 
   Trash2, 
   ChevronRight, 
+  ChevronDown,
   Calendar, 
   MapPin, 
   JapaneseYen,
@@ -49,31 +50,35 @@ const SLOGANS = [
   "物品不应成为负担，而应是生活的助力。"
 ];
 
-const CollapsibleLogSection: React.FC<{ 
+const CollapsibleSection: React.FC<{ 
   title: string, 
   children: React.ReactNode, 
   defaultOpen?: boolean,
-  level?: number 
-}> = ({ title, children, defaultOpen = false, level = 0 }) => {
+  level?: number,
+  rightElement?: React.ReactNode
+}> = ({ title, children, defaultOpen = false, level = 0, rightElement }) => {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   
   return (
     <div className={cn("space-y-2", level > 0 && "ml-4 border-l border-black/[0.03] pl-4")}>
-      <button 
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 w-full text-left group py-1"
-      >
-        <ChevronRight 
-          size={12} 
-          className={cn("text-black/20 transition-transform", isOpen && "rotate-90")} 
-        />
-        <span className={cn(
-          "font-bold uppercase tracking-widest text-black/40 group-hover:text-black transition-colors",
-          level === 0 ? "text-[10px]" : "text-[9px]"
-        )}>
-          {title}
-        </span>
-      </button>
+      <div className="flex items-center justify-between group py-1">
+        <button 
+          onClick={() => setIsOpen(!isOpen)}
+          className="flex items-center gap-2 flex-1 text-left"
+        >
+          <ChevronRight 
+            size={12} 
+            className={cn("text-black/20 transition-transform", isOpen && "rotate-90")} 
+          />
+          <span className={cn(
+            "font-bold uppercase tracking-widest text-black/40 group-hover:text-black transition-colors",
+            level === 0 ? "text-[10px]" : "text-[9px]"
+          )}>
+            {title}
+          </span>
+        </button>
+        {rightElement}
+      </div>
       {isOpen && <div className="space-y-2 pb-2">{children}</div>}
     </div>
   );
@@ -85,7 +90,9 @@ const STORAGE_KEYS = {
   ITEMS: 'jian_items_v2',
   LOGS: 'jian_logs_v2',
   CATEGORIES: 'jian_categories_v2',
-  WISHLIST: 'jian_wishlist_v2'
+  WISHLIST: 'jian_wishlist_v2',
+  LAST_BACKUP: 'jian_last_backup',
+  LAST_RESTORE: 'jian_last_restore'
 };
 
 const storage = {
@@ -97,6 +104,25 @@ const storage = {
   setCategories: (categories: Category[]) => localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories)),
   getWishlist: (): WishlistItem[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.WISHLIST) || '[]'),
   setWishlist: (items: WishlistItem[]) => localStorage.setItem(STORAGE_KEYS.WISHLIST, JSON.stringify(items)),
+  getLastBackup: (): string | null => localStorage.getItem(STORAGE_KEYS.LAST_BACKUP),
+  setLastBackup: (date: string) => localStorage.setItem(STORAGE_KEYS.LAST_BACKUP, date),
+  getLastRestore: (): string | null => localStorage.getItem(STORAGE_KEYS.LAST_RESTORE),
+  setLastRestore: (date: string) => localStorage.setItem(STORAGE_KEYS.LAST_RESTORE, date),
+};
+
+const getSortDate = (item: Item) => {
+  if (item.purchase_date) return new Date(item.purchase_date).getTime();
+  
+  const createdAt = new Date(item.created_at).getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  
+  switch (item.fuzzy_date) {
+    case '不久前': return createdAt - (30 * dayMs);
+    case '今年': return createdAt - (300 * dayMs);
+    case '去年': return createdAt - (600 * dayMs);
+    case '几年前': return createdAt - (900 * dayMs);
+    default: return createdAt;
+  }
 };
 
 const calculateStats = (items: Item[], logs: Log[]) => {
@@ -118,6 +144,13 @@ const calculateStats = (items: Item[], logs: Log[]) => {
     soldValue: items.filter(i => i.status === 'sold').reduce((sum, i) => sum + (i.selling_price || 0), 0)
   };
 
+  const longTermStats = {
+    tenPlus: activeItems.filter(i => differenceInYears(new Date(), new Date(getSortDate(i))) >= 10).length,
+    fivePlus: activeItems.filter(i => differenceInYears(new Date(), new Date(getSortDate(i))) >= 5).length,
+    threePlus: activeItems.filter(i => differenceInYears(new Date(), new Date(getSortDate(i))) >= 3).length,
+    onePlus: activeItems.filter(i => differenceInYears(new Date(), new Date(getSortDate(i))) >= 1).length,
+  };
+
   const historyMap = logs.reduce((acc: Record<string, number>, log) => {
     const date = log.date;
     if (!acc[date]) acc[date] = 0;
@@ -130,7 +163,7 @@ const calculateStats = (items: Item[], logs: Log[]) => {
     .map(([date, change]) => ({ date, change }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  return { categoryStats, history, summary };
+  return { categoryStats, history, summary, longTermStats };
 };
 
 // --- Components ---
@@ -354,7 +387,14 @@ const ItemModal: React.FC<{
 
     const allItems = storage.getItems();
     const allLogs = storage.getLogs();
+    const allCategories = storage.getCategories();
     const now = new Date().toISOString().split('T')[0];
+
+    // Handle new category
+    if (data.category && !allCategories.find(c => c.name === data.category)) {
+      const newCat: Category = { id: Date.now(), name: data.category, created_at: new Date().toISOString() };
+      storage.setCategories([...allCategories, newCat]);
+    }
 
     if (item) {
       const updatedItems = allItems.map(i => i.id === item.id ? { ...i, ...data, is_hesitation: data.is_hesitation ? 1 : 0 } : i);
@@ -422,17 +462,52 @@ const ItemModal: React.FC<{
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">分类</label>
-              <div className="relative">
+              <div className="relative group/cat">
                 <input 
-                  list="categories-list"
                   value={formData.category}
                   onChange={e => setFormData({...formData, category: e.target.value})}
-                  className="minimal-input" 
-                  placeholder="分类"
+                  className="minimal-input pr-8" 
+                  placeholder="选择或输入分类"
                 />
-                <datalist id="categories-list">
-                  {categories.map(c => <option key={c.id} value={c.name} />)}
-                </datalist>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-black/20">
+                  <ChevronDown size={14} />
+                </div>
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-black/5 shadow-xl z-[110] hidden group-focus-within/cat:block max-h-40 overflow-y-auto">
+                  {categories.filter(c => c.name.toLowerCase().includes(formData.category.toLowerCase())).length > 0 ? (
+                    categories
+                      .filter(c => c.name.toLowerCase().includes(formData.category.toLowerCase()))
+                      .map(c => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className="w-full text-left px-4 py-2 text-xs hover:bg-black/5 transition-colors"
+                          onMouseDown={(e) => {
+                            e.preventDefault(); // Prevent input from losing focus before click
+                            setFormData({...formData, category: c.name});
+                            (e.currentTarget.parentElement?.parentElement?.querySelector('input') as HTMLInputElement)?.blur();
+                          }}
+                        >
+                          {c.name}
+                        </button>
+                      ))
+                  ) : formData.category ? (
+                    <div className="px-4 py-2 text-[10px] text-black/30 italic text-center">按回车以创建新分类 "{formData.category}"</div>
+                  ) : (
+                    categories.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="w-full text-left px-4 py-2 text-xs hover:bg-black/5 transition-colors"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setFormData({...formData, category: c.name});
+                        }}
+                      >
+                        {c.name}
+                      </button>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
             <div className="space-y-1">
@@ -682,8 +757,15 @@ const WishlistModal: React.FC<{
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const allWishlist = storage.getWishlist();
+    const allCategories = storage.getCategories();
     const now = new Date().toISOString();
     const dateStr = now.split('T')[0];
+
+    // Handle new category
+    if (formData.category && !allCategories.find(c => c.name === formData.category)) {
+      const newCat: Category = { id: Date.now(), name: formData.category, created_at: new Date().toISOString() };
+      storage.setCategories([...allCategories, newCat]);
+    }
 
     if (item) {
       const updated = allWishlist.map(i => {
@@ -732,7 +814,53 @@ const WishlistModal: React.FC<{
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">分类</label>
-                <input list="categories-list" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="minimal-input" placeholder="分类" />
+                <div className="relative group/cat">
+                  <input 
+                    value={formData.category} 
+                    onChange={e => setFormData({...formData, category: e.target.value})} 
+                    className="minimal-input pr-8" 
+                    placeholder="选择或输入分类" 
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-black/20">
+                    <ChevronDown size={14} />
+                  </div>
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-black/5 shadow-xl z-[110] hidden group-focus-within/cat:block max-h-40 overflow-y-auto">
+                    {categories.filter(c => c.name.toLowerCase().includes(formData.category.toLowerCase())).length > 0 ? (
+                      categories
+                        .filter(c => c.name.toLowerCase().includes(formData.category.toLowerCase()))
+                        .map(c => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            className="w-full text-left px-4 py-2 text-xs hover:bg-black/5 transition-colors"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setFormData({...formData, category: c.name});
+                              (e.currentTarget.parentElement?.parentElement?.querySelector('input') as HTMLInputElement)?.blur();
+                            }}
+                          >
+                            {c.name}
+                          </button>
+                        ))
+                    ) : formData.category ? (
+                      <div className="px-4 py-2 text-[10px] text-black/30 italic text-center">按回车以创建新分类 "{formData.category}"</div>
+                    ) : (
+                      categories.map(c => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className="w-full text-left px-4 py-2 text-xs hover:bg-black/5 transition-colors"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setFormData({...formData, category: c.name});
+                          }}
+                        >
+                          {c.name}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">欲望值</label>
@@ -819,14 +947,18 @@ export default function App() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [wishlist, setWishlist] = useState<WishlistItem[]>([]);
+  const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [lastRestore, setLastRestore] = useState<string | null>(null);
   const [stats, setStats] = useState<{ 
     categoryStats: CategoryStat[], 
     history: HistoryPoint[],
-    summary: { discarded: number, gifted: number, sold: number, soldValue: number }
+    summary: { discarded: number, gifted: number, sold: number, soldValue: number },
+    longTermStats: { tenPlus: number, fivePlus: number, threePlus: number, onePlus: number }
   }>({ 
     categoryStats: [], 
     history: [],
-    summary: { discarded: 0, gifted: 0, sold: 0, soldValue: 0 }
+    summary: { discarded: 0, gifted: 0, sold: 0, soldValue: 0 },
+    longTermStats: { tenPlus: 0, fivePlus: 0, threePlus: 0, onePlus: 0 }
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isWishlistModalOpen, setIsWishlistModalOpen] = useState(false);
@@ -855,6 +987,8 @@ export default function App() {
     setCategories(localCategories);
     setWishlist(localWishlist);
     setStats(calculateStats(localItems, localLogs));
+    setLastBackup(storage.getLastBackup());
+    setLastRestore(storage.getLastRestore());
   };
 
   useEffect(() => {
@@ -1054,6 +1188,9 @@ export default function App() {
       categories: storage.getCategories(),
       wishlist: storage.getWishlist()
     };
+    const now = new Date().toISOString();
+    storage.setLastBackup(now);
+    setLastBackup(now);
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -1069,11 +1206,30 @@ export default function App() {
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target?.result as string);
-        if (data.items && data.logs && data.categories) {
+        if (data.items && data.logs) {
           storage.setItems(data.items);
           storage.setLogs(data.logs);
-          storage.setCategories(data.categories);
+          
+          // Sync categories
+          const existingCats = data.categories || [];
+          const itemCats = data.items.map((i: any) => i.category).filter(Boolean);
+          const wishlistCats = (data.wishlist || []).map((i: any) => i.category).filter(Boolean);
+          const allCatNames = Array.from(new Set([...existingCats.map((c: any) => c.name), ...itemCats, ...wishlistCats]));
+          
+          const syncedCats: Category[] = allCatNames.map((name, index) => ({
+            id: Date.now() + index,
+            name: name as string,
+            created_at: new Date().toISOString()
+          }));
+          
+          storage.setCategories(syncedCats);
+          
           if (data.wishlist) storage.setWishlist(data.wishlist);
+          
+          const now = new Date().toISOString();
+          storage.setLastRestore(now);
+          setLastRestore(now);
+          
           fetchData();
           alert('导入成功');
         } else {
@@ -1091,12 +1247,14 @@ export default function App() {
     (item.category || '未分类').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const groupedItems = filteredItems.reduce((acc: Record<string, Item[]>, item) => {
-    const cat = item.category || '未分类';
-    if (!acc[cat]) acc[cat] = [];
-    acc[cat].push(item);
-    return acc;
-  }, {});
+  const groupedItems = filteredItems
+    .sort((a, b) => getSortDate(b) - getSortDate(a)) // Newest first (Shortest holding time)
+    .reduce((acc: Record<string, Item[]>, item) => {
+      const cat = item.category || '未分类';
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(item);
+      return acc;
+    }, {});
 
   const groupedLogs = logs.reduce((acc: any, log) => {
     const date = new Date(log.date);
@@ -1173,12 +1331,12 @@ export default function App() {
 
               <div className="space-y-12">
                 {(Object.entries(groupedItems) as [string, Item[]][]).map(([category, catItems]) => (
-                  <div key={category} className="space-y-4">
-                    <div className="flex items-center gap-4">
-                      <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">{category}</h2>
-                      <div className="h-px flex-1 bg-black/[0.03]" />
-                      <span className="text-[10px] font-mono text-black/20">{catItems.length}</span>
-                    </div>
+                  <CollapsibleSection 
+                    key={category} 
+                    title={category}
+                    defaultOpen={true}
+                    rightElement={<span className="text-[10px] font-mono text-black/20">{catItems.length}</span>}
+                  >
                     <div className="divide-y divide-black/[0.03]">
                       {catItems.map(item => (
                         <ItemCard 
@@ -1192,7 +1350,7 @@ export default function App() {
                         />
                       ))}
                     </div>
-                  </div>
+                  </CollapsibleSection>
                 ))}
                 
                 {items.length === 0 && (
@@ -1257,32 +1415,9 @@ export default function App() {
 
               <div className="space-y-12">
                 <div className="space-y-4">
-                  <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-black/10 border-b border-black/[0.03] pb-2">考虑中</h3>
-                  <div className="divide-y divide-black/[0.03]">
-                    {wishlist.filter(i => i.status === 'considering').map(item => (
-                      <WishlistItemCard 
-                        key={item.id} 
-                        item={item} 
-                        onEdit={(item) => {
-                          setEditingWishlistItem(item);
-                          setIsWishlistModalOpen(true);
-                        }}
-                        onStatusChange={handleWishlistStatusChange}
-                      />
-                    ))}
-                    {wishlist.filter(i => i.status === 'considering').length === 0 && (
-                      <div className="py-12 text-center text-black/10">
-                        <p className="text-xs italic font-serif">暂无考虑中的物品。</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {wishlist.some(i => i.status === 'abandoned') && (
-                  <div className="space-y-4">
-                    <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-black/10 border-b border-black/[0.03] pb-2">已放弃购买</h3>
+                  <CollapsibleSection title="考虑中" defaultOpen={true}>
                     <div className="divide-y divide-black/[0.03]">
-                      {wishlist.filter(i => i.status === 'abandoned').map(item => (
+                      {wishlist.filter(i => i.status === 'considering').map(item => (
                         <WishlistItemCard 
                           key={item.id} 
                           item={item} 
@@ -1293,7 +1428,32 @@ export default function App() {
                           onStatusChange={handleWishlistStatusChange}
                         />
                       ))}
+                      {wishlist.filter(i => i.status === 'considering').length === 0 && (
+                        <div className="py-12 text-center text-black/10">
+                          <p className="text-xs italic font-serif">暂无考虑中的物品。</p>
+                        </div>
+                      )}
                     </div>
+                  </CollapsibleSection>
+                </div>
+
+                {wishlist.some(i => i.status === 'abandoned') && (
+                  <div className="space-y-4">
+                    <CollapsibleSection title="已放弃购买" defaultOpen={false}>
+                      <div className="divide-y divide-black/[0.03]">
+                        {wishlist.filter(i => i.status === 'abandoned').map(item => (
+                          <WishlistItemCard 
+                            key={item.id} 
+                            item={item} 
+                            onEdit={(item) => {
+                              setEditingWishlistItem(item);
+                              setIsWishlistModalOpen(true);
+                            }}
+                            onStatusChange={handleWishlistStatusChange}
+                          />
+                        ))}
+                      </div>
+                    </CollapsibleSection>
                   </div>
                 )}
               </div>
@@ -1378,6 +1538,35 @@ export default function App() {
               </div>
 
               <div className="space-y-8">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">长期主义</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-black/[0.02] p-6 space-y-2">
+                    <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 10 年以上</p>
+                    <p className="text-3xl font-mono">{stats.longTermStats.tenPlus}</p>
+                    <p className="text-[9px] text-black/20 italic">时光的见证者</p>
+                  </div>
+                  <div className="bg-black/[0.02] p-6 space-y-2">
+                    <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 5 年以上</p>
+                    <p className="text-3xl font-mono">{stats.longTermStats.fivePlus}</p>
+                    <p className="text-[9px] text-black/20 italic">经久耐用的选择</p>
+                  </div>
+                  <div className="bg-black/[0.02] p-6 space-y-2">
+                    <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 3 年以上</p>
+                    <p className="text-3xl font-mono">{stats.longTermStats.threePlus}</p>
+                    <p className="text-[9px] text-black/20 italic">稳定的生活伙伴</p>
+                  </div>
+                  <div className="bg-black/[0.02] p-6 space-y-2">
+                    <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 1 年以上</p>
+                    <p className="text-3xl font-mono">{stats.longTermStats.onePlus}</p>
+                    <p className="text-[9px] text-black/20 italic">通过了时间的考验</p>
+                  </div>
+                </div>
+                <div className="p-6 border border-black/5 bg-black/[0.01] text-center">
+                  <p className="text-xs italic text-black/40">“最好的物品，是那些能陪伴我们走过漫长岁月的。”</p>
+                </div>
+              </div>
+
+              <div className="space-y-8">
                 <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">持有量趋势</h3>
                 <div className="h-[240px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
@@ -1437,11 +1626,11 @@ export default function App() {
                 <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">断舍离日志</h2>
                 <div className="space-y-4">
                   {Object.entries(groupedLogs).sort((a, b) => b[0].localeCompare(a[0])).map(([year, months]: [string, any]) => (
-                    <CollapsibleLogSection key={year} title={year}>
+                    <CollapsibleSection key={year} title={year}>
                       {Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).map(([month, days]: [string, any]) => (
-                        <CollapsibleLogSection key={month} title={month} level={1}>
+                        <CollapsibleSection key={month} title={month} level={1}>
                           {Object.entries(days).sort((a, b) => b[0].localeCompare(a[0])).map(([day, dayLogs]: [string, any]) => (
-                            <CollapsibleLogSection key={day} title={day} level={2}>
+                            <CollapsibleSection key={day} title={day} level={2}>
                               <div className="space-y-4 pt-2">
                                 {dayLogs.map((log: Log) => {
                                   const actionLabels: Record<string, string> = {
@@ -1471,11 +1660,11 @@ export default function App() {
                                   );
                                 })}
                               </div>
-                            </CollapsibleLogSection>
+                            </CollapsibleSection>
                           ))}
-                        </CollapsibleLogSection>
+                        </CollapsibleSection>
                       ))}
-                    </CollapsibleLogSection>
+                    </CollapsibleSection>
                   ))}
                   {logs.length === 0 && <p className="text-sm italic text-black/20">暂无日志。</p>}
                 </div>
@@ -1510,11 +1699,17 @@ export default function App() {
               <div className="space-y-8">
                 <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-black/20">数据管理</h2>
                 <div className="grid grid-cols-2 gap-4">
-                  <button onClick={exportToJSON} className="minimal-button py-3 text-[10px]">备份 JSON</button>
-                  <label className="minimal-button py-3 text-[10px] text-center cursor-pointer">
-                    还原 JSON
-                    <input type="file" accept=".json" onChange={importFromJSON} className="hidden" />
-                  </label>
+                  <div className="space-y-2">
+                    <button onClick={exportToJSON} className="minimal-button w-full py-3 text-[10px]">备份 JSON</button>
+                    {lastBackup && <p className="text-[8px] text-black/30 text-center">上次备份: {format(new Date(lastBackup), 'yyyy-MM-dd HH:mm')}</p>}
+                  </div>
+                  <div className="space-y-2">
+                    <label className="minimal-button w-full py-3 text-[10px] text-center cursor-pointer block">
+                      还原 JSON
+                      <input type="file" accept=".json" onChange={importFromJSON} className="hidden" />
+                    </label>
+                    {lastRestore && <p className="text-[8px] text-black/30 text-center">上次还原: {format(new Date(lastRestore), 'yyyy-MM-dd HH:mm')}</p>}
+                  </div>
                 </div>
                 <p className="text-[9px] text-black/20 italic">注：数据存储在您的浏览器本地。使用备份/还原功能可在不同设备间迁移数据。</p>
               </div>
