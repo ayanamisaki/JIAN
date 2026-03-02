@@ -38,7 +38,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { cn } from './lib/utils';
-import { Item, Log, CategoryStat, HistoryPoint, Category, WishlistItem, PriceComparison } from './types';
+import { Item, Log, CategoryStat, HistoryPoint, Category, WishlistItem, PriceComparison, Consumable, SubConsumable } from './types';
 
 const SLOGANS = [
   "拥有的越少，得到的越多。",
@@ -91,6 +91,7 @@ const STORAGE_KEYS = {
   LOGS: 'jian_logs_v2',
   CATEGORIES: 'jian_categories_v2',
   WISHLIST: 'jian_wishlist_v2',
+  CONSUMABLES: 'jian_consumables_v1',
   LAST_BACKUP: 'jian_last_backup',
   LAST_RESTORE: 'jian_last_restore'
 };
@@ -104,6 +105,8 @@ const storage = {
   setCategories: (categories: Category[]) => localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories)),
   getWishlist: (): WishlistItem[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.WISHLIST) || '[]'),
   setWishlist: (items: WishlistItem[]) => localStorage.setItem(STORAGE_KEYS.WISHLIST, JSON.stringify(items)),
+  getConsumables: (): Consumable[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.CONSUMABLES) || '[]'),
+  setConsumables: (items: Consumable[]) => localStorage.setItem(STORAGE_KEYS.CONSUMABLES, JSON.stringify(items)),
   getLastBackup: (): string | null => localStorage.getItem(STORAGE_KEYS.LAST_BACKUP),
   setLastBackup: (date: string) => localStorage.setItem(STORAGE_KEYS.LAST_BACKUP, date),
   getLastRestore: (): string | null => localStorage.getItem(STORAGE_KEYS.LAST_RESTORE),
@@ -125,7 +128,7 @@ const getSortDate = (item: Item) => {
   }
 };
 
-const calculateStats = (items: Item[], logs: Log[]) => {
+const calculateStats = (items: Item[], logs: Log[], consumables: Consumable[]) => {
   const activeItems = items.filter(i => i.status === 'active');
   const categoryStats = Object.entries(
     activeItems.reduce((acc: Record<string, {count: number, total_value: number}>, item) => {
@@ -151,6 +154,18 @@ const calculateStats = (items: Item[], logs: Log[]) => {
     onePlus: activeItems.filter(i => differenceInYears(new Date(), new Date(getSortDate(i))) >= 1).length,
   };
 
+  const consumableStats = {
+    finishedCount: consumables.filter(c => c.status === 'finished').length,
+    byCategory: Object.entries(
+      consumables.reduce((acc: Record<string, number>, c) => {
+        if (c.status === 'finished') {
+          acc[c.category] = (acc[c.category] || 0) + 1;
+        }
+        return acc;
+      }, {})
+    ).map(([category, count]) => ({ category, count }))
+  };
+
   const historyMap = logs.reduce((acc: Record<string, number>, log) => {
     const date = log.date;
     if (!acc[date]) acc[date] = 0;
@@ -163,7 +178,7 @@ const calculateStats = (items: Item[], logs: Log[]) => {
     .map(([date, change]) => ({ date, change }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  return { categoryStats, history, summary, longTermStats };
+  return { categoryStats, history, summary, longTermStats, consumableStats };
 };
 
 // --- Components ---
@@ -939,6 +954,350 @@ const WishlistModal: React.FC<{
   );
 };
 
+const ConsumableCard: React.FC<{ 
+  consumable: Consumable, 
+  onEdit: (c: Consumable) => void, 
+  onDelete: (id: number) => void,
+  onUpdate: (c: Consumable) => void
+}> = ({ consumable, onEdit, onDelete, onUpdate }) => {
+  const totalSubItems = consumable.sub_items.length;
+  const finishedSubItems = consumable.sub_items.filter(s => s.status === 'finished').length;
+  const usingSubItems = consumable.sub_items.filter(s => s.status === 'using').length;
+  
+  const progress = totalSubItems > 0 
+    ? (finishedSubItems / totalSubItems) * 100 + (usingSubItems / totalSubItems) * 50
+    : 0;
+
+  const handleSubStatusChange = (subId: number, status: SubConsumable['status']) => {
+    const newSubItems = consumable.sub_items.map(s => {
+      if (s.id === subId) {
+        const now = new Date().toISOString().split('T')[0];
+        return { 
+          ...s, 
+          status,
+          start_date: status === 'using' ? now : s.start_date,
+          finish_date: status === 'finished' ? now : s.finish_date
+        };
+      }
+      return s;
+    });
+
+    // Recalculate parent status
+    let parentStatus: Consumable['status'] = 'to_use';
+    if (newSubItems.every(s => s.status === 'finished')) {
+      parentStatus = 'finished';
+    } else if (newSubItems.some(s => s.status === 'using' || s.status === 'finished')) {
+      parentStatus = 'using';
+    }
+
+    onUpdate({ ...consumable, sub_items: newSubItems, status: parentStatus });
+  };
+
+  return (
+    <motion.div 
+      layout
+      className="bg-white border-b border-black/5 p-6 group hover:bg-black/[0.01] transition-colors"
+    >
+      <div className="flex justify-between items-start mb-4">
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onEdit(consumable)}>
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-lg font-medium text-black/90 truncate">{consumable.name}</h3>
+            <span className="text-[9px] font-bold text-black/30 bg-black/5 px-1.5 py-0.5 rounded uppercase tracking-wider">{consumable.category}</span>
+          </div>
+          <div className="flex items-center gap-4 text-[10px] text-black/30 font-mono">
+            <span>{consumable.quantity} {consumable.unit_capacity}</span>
+            <span>¥{consumable.price.toLocaleString()}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => onEdit(consumable)}
+            className="p-2 text-black/10 hover:text-black transition-colors"
+          >
+            <Settings size={14} />
+          </button>
+          <button 
+            onClick={() => onDelete(consumable.id)}
+            className="p-2 text-black/10 hover:text-red-500 transition-colors"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {consumable.sub_items.map((sub, idx) => (
+            <button
+              key={sub.id}
+              onClick={() => {
+                const nextStatus: SubConsumable['status'] = 
+                  sub.status === 'to_use' ? 'using' : 
+                  sub.status === 'using' ? 'finished' : 'to_use';
+                handleSubStatusChange(sub.id, nextStatus);
+              }}
+              className={cn(
+                "w-8 h-8 flex items-center justify-center text-[10px] font-mono border transition-all",
+                sub.status === 'finished' ? "bg-black text-white border-black" :
+                sub.status === 'using' ? "bg-black/5 text-black border-black/20 animate-pulse" :
+                "bg-transparent text-black/20 border-black/10 hover:border-black/30"
+              )}
+              title={sub.status === 'finished' ? `已用完 (${sub.finish_date})` : sub.status === 'using' ? `使用中 (始于 ${sub.start_date})` : '待使用'}
+            >
+              {idx + 1}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex justify-between text-[9px] font-bold uppercase tracking-widest text-black/30">
+            <span>消耗进度</span>
+            <span>{Math.round(progress)}%</span>
+          </div>
+          <div className="h-1 w-full bg-black/5 rounded-full overflow-hidden">
+            <motion.div 
+              initial={{ width: 0 }}
+              animate={{ width: `${progress}%` }}
+              className="h-full bg-black"
+            />
+          </div>
+        </div>
+        
+        {consumable.status === 'using' && consumable.sub_items.some(s => s.status === 'using') && (
+          <div className="flex justify-between items-center">
+            <p className="text-[10px] text-black/40 italic">
+              已开启 {differenceInDays(new Date(), new Date(consumable.sub_items.find(s => s.status === 'using')?.start_date || new Date()))} 天
+            </p>
+            {consumable.planned_days && (
+              <p className="text-[10px] text-black/20 font-mono">
+                计划 {consumable.planned_days} 天
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
+const ConsumableModal: React.FC<{
+  isOpen: boolean,
+  onClose: () => void,
+  onSave: (c: Consumable) => void,
+  consumable: Consumable | null
+}> = ({ isOpen, onClose, onSave, consumable }) => {
+  const [formData, setFormData] = useState<Partial<Consumable>>({
+    name: '',
+    category: '',
+    quantity: 1,
+    unit_capacity: '',
+    price: 0,
+    experience: '',
+    repurchase: false,
+    status: 'to_use',
+    sub_items: []
+  });
+
+  const [existingCategories, setExistingCategories] = useState<string[]>(['洗护品', '日用品', '清洁品', '护肤品', '其他']);
+
+  useEffect(() => {
+    const all = storage.getConsumables();
+    const cats = Array.from(new Set([...['洗护品', '日用品', '清洁品', '护肤品', '其他'], ...all.map(c => c.category)]));
+    setExistingCategories(cats);
+
+    if (consumable) {
+      setFormData(consumable);
+    } else {
+      setFormData({
+        name: '',
+        category: '',
+        quantity: 1,
+        unit_capacity: '',
+        price: 0,
+        experience: '',
+        repurchase: false,
+        status: 'to_use',
+        sub_items: []
+      });
+    }
+  }, [consumable, isOpen]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name || !formData.category) return;
+
+    const quantity = Number(formData.quantity) || 1;
+    let subItems = formData.sub_items || [];
+    
+    if (subItems.length !== quantity) {
+      if (subItems.length < quantity) {
+        const toAdd = quantity - subItems.length;
+        for (let i = 0; i < toAdd; i++) {
+          subItems.push({ id: Date.now() + Math.random(), status: 'to_use' });
+        }
+      } else {
+        subItems = subItems.slice(0, quantity);
+      }
+    }
+
+    onSave({
+      ...formData as Consumable,
+      id: consumable?.id || Date.now(),
+      quantity,
+      sub_items: subItems,
+      created_at: consumable?.created_at || new Date().toISOString()
+    });
+    onClose();
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+            className="absolute inset-0 bg-black/60 backdrop-blur-md"
+          />
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="relative w-full max-w-lg bg-white rounded-none shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+          >
+            <div className="p-8 border-b border-black/5 flex justify-between items-center">
+              <div>
+                <h2 className="text-2xl font-serif font-bold text-black">{consumable ? '编辑消耗品' : '新增消耗品'}</h2>
+                <p className="text-[10px] text-black/30 uppercase tracking-[0.2em] mt-1">Consumable Management</p>
+              </div>
+              <button onClick={onClose} className="p-2 hover:bg-black/5 transition-colors"><X size={20} /></button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="p-8 space-y-8 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-6">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">名称</label>
+                  <input 
+                    required
+                    value={formData.name}
+                    onChange={e => setFormData({...formData, name: e.target.value})}
+                    className="minimal-input" 
+                    placeholder="例如：抽纸、洗面奶"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">类别</label>
+                  <div className="relative group">
+                    <input 
+                      required
+                      value={formData.category}
+                      onChange={e => setFormData({...formData, category: e.target.value})}
+                      className="minimal-input" 
+                      placeholder="选择或输入"
+                    />
+                    <div className="absolute top-full left-0 right-0 z-10 bg-white border border-black/5 shadow-xl opacity-0 group-focus-within:opacity-100 pointer-events-none group-focus-within:pointer-events-auto transition-all">
+                      {existingCategories.map(c => (
+                        <button 
+                          key={c}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setFormData({...formData, category: c});
+                          }}
+                          className="w-full text-left px-4 py-2 text-xs hover:bg-black/5 transition-colors"
+                        >
+                          {c}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-6">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">数量</label>
+                  <input 
+                    type="number"
+                    required
+                    value={formData.quantity}
+                    onChange={e => setFormData({...formData, quantity: parseInt(e.target.value) || 0})}
+                    className="minimal-input font-mono" 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">单件容量</label>
+                  <input 
+                    value={formData.unit_capacity}
+                    onChange={e => setFormData({...formData, unit_capacity: e.target.value})}
+                    className="minimal-input" 
+                    placeholder="100ml / 1包"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">单价 (¥)</label>
+                  <input 
+                    type="number"
+                    value={formData.price}
+                    onChange={e => setFormData({...formData, price: parseFloat(e.target.value) || 0})}
+                    className="minimal-input font-mono" 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">计划使用天数</label>
+                <input 
+                  type="number"
+                  value={formData.planned_days || ''}
+                  onChange={e => setFormData({...formData, planned_days: parseInt(e.target.value) || 0})}
+                  className="minimal-input font-mono" 
+                  placeholder="例如：30"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-black/30 uppercase tracking-widest">使用体验</label>
+                <textarea 
+                  value={formData.experience}
+                  onChange={e => setFormData({...formData, experience: e.target.value})}
+                  className="minimal-input min-h-[80px] resize-none" 
+                  placeholder="记录使用感受..."
+                />
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button 
+                  type="button"
+                  onClick={() => setFormData({...formData, repurchase: !formData.repurchase})}
+                  className={cn(
+                    "w-10 h-6 rounded-full transition-all relative",
+                    formData.repurchase ? "bg-black" : "bg-black/10"
+                  )}
+                >
+                  <div className={cn(
+                    "absolute top-1 w-4 h-4 bg-white rounded-full transition-all",
+                    formData.repurchase ? "left-5" : "left-1"
+                  )} />
+                </button>
+                <span className="text-xs font-bold text-black/60">计划回购 (用完后自动加入心愿单)</span>
+              </div>
+
+              <div className="pt-4">
+                <button type="submit" className="w-full py-4 bg-black text-white text-xs font-bold uppercase tracking-[0.3em] hover:bg-black/80 transition-all">
+                  保存记录
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -947,27 +1306,33 @@ export default function App() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [wishlist, setWishlist] = useState<WishlistItem[]>([]);
+  const [consumables, setConsumables] = useState<Consumable[]>([]);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
   const [lastRestore, setLastRestore] = useState<string | null>(null);
   const [stats, setStats] = useState<{ 
     categoryStats: CategoryStat[], 
     history: HistoryPoint[],
     summary: { discarded: number, gifted: number, sold: number, soldValue: number },
-    longTermStats: { tenPlus: number, fivePlus: number, threePlus: number, onePlus: number }
+    longTermStats: { tenPlus: number, fivePlus: number, threePlus: number, onePlus: number },
+    consumableStats: { finishedCount: number, byCategory: { category: string, count: number }[] }
   }>({ 
     categoryStats: [], 
     history: [],
     summary: { discarded: 0, gifted: 0, sold: 0, soldValue: 0 },
-    longTermStats: { tenPlus: 0, fivePlus: 0, threePlus: 0, onePlus: 0 }
+    longTermStats: { tenPlus: 0, fivePlus: 0, threePlus: 0, onePlus: 0 },
+    consumableStats: { finishedCount: 0, byCategory: [] }
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isWishlistModalOpen, setIsWishlistModalOpen] = useState(false);
+  const [isConsumableModalOpen, setIsConsumableModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [editingWishlistItem, setEditingWishlistItem] = useState<WishlistItem | null>(null);
+  const [editingConsumable, setEditingConsumable] = useState<Consumable | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [slogan] = useState(() => SLOGANS[Math.floor(Math.random() * SLOGANS.length)]);
   const [detailView, setDetailView] = useState<string | null>(null);
   const [detailItems, setDetailItems] = useState<Item[]>([]);
+  const [detailConsumables, setDetailConsumables] = useState<Consumable[]>([]);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [pendingAction, setPendingAction] = useState<{
     id: number;
@@ -981,12 +1346,14 @@ export default function App() {
     const localLogs = storage.getLogs();
     const localCategories = storage.getCategories();
     const localWishlist = storage.getWishlist();
+    const localConsumables = storage.getConsumables();
     
     setItems(localItems.filter(i => i.status === 'active'));
     setLogs(localLogs);
     setCategories(localCategories);
     setWishlist(localWishlist);
-    setStats(calculateStats(localItems, localLogs));
+    setConsumables(localConsumables);
+    setStats(calculateStats(localItems, localLogs, localConsumables));
     setLastBackup(storage.getLastBackup());
     setLastRestore(storage.getLastRestore());
   };
@@ -1060,8 +1427,25 @@ export default function App() {
 
   const showDetails = (status: string) => {
     const allItems = storage.getItems();
+    setDetailConsumables([]);
     setDetailItems(allItems.filter(i => i.status === status).sort((a, b) => (b.removed_date || '').localeCompare(a.removed_date || '')));
-    setDetailView(status);
+    setDetailView(status === 'discarded' ? '已丢弃' : status === 'gifted' ? '已转赠' : status === 'sold' ? '已转卖' : status);
+  };
+
+  const showLongTermDetails = (years: number) => {
+    const allItems = storage.getItems();
+    setDetailConsumables([]);
+    const filtered = allItems.filter(i => i.status === 'active' && differenceInYears(new Date(), new Date(getSortDate(i))) >= years);
+    setDetailItems(filtered);
+    setDetailView(`陪伴 ${years} 年以上`);
+  };
+
+  const showConsumableDetails = (category?: string) => {
+    const all = storage.getConsumables();
+    const filtered = category ? all.filter(c => c.category === category && c.status === 'finished') : all.filter(c => c.status === 'finished');
+    setDetailItems([]);
+    setDetailConsumables(filtered);
+    setDetailView(category ? `已用完: ${category}` : '已用完消耗品');
   };
 
   const addCategory = () => {
@@ -1181,12 +1565,74 @@ export default function App() {
     fetchData();
   };
 
+  const handleEditConsumable = (c: Consumable) => {
+    setEditingConsumable(c);
+    setIsConsumableModalOpen(true);
+  };
+
+  const handleAddConsumable = () => {
+    setEditingConsumable(null);
+    setIsConsumableModalOpen(true);
+  };
+
+  const updateConsumable = (updated: Consumable) => {
+    const all = storage.getConsumables();
+    const index = all.findIndex(c => c.id === updated.id);
+    
+    // Check if status changed to finished and repurchase is true
+    if (updated.status === 'finished' && updated.repurchase) {
+      const wishlist = storage.getWishlist();
+      if (!wishlist.find(w => w.name === updated.name && w.status === 'considering')) {
+        const newItem: WishlistItem = {
+          id: Date.now(),
+          name: updated.name,
+          category: updated.category,
+          prices: [{ platform: '自动添加', price: updated.price }],
+          reason_to_buy: '消耗品回购',
+          reason_to_quit: '',
+          pros: '常用消耗品',
+          cons: '',
+          status: 'considering',
+          desire_level: 5,
+          logs: [{ id: Date.now(), date: format(new Date(), 'yyyy-MM-dd'), action: '从消耗品自动添加' }],
+          created_at: new Date().toISOString()
+        };
+        storage.setWishlist([...wishlist, newItem]);
+      }
+    }
+
+    if (index > -1) {
+      all[index] = updated;
+    } else {
+      all.push(updated);
+    }
+    storage.setConsumables(all);
+    fetchData();
+  };
+
+  const deleteConsumable = (id: number) => {
+    if (confirm('确定要删除这个消耗品吗？')) {
+      const all = storage.getConsumables();
+      storage.setConsumables(all.filter(c => c.id !== id));
+      fetchData();
+    }
+  };
+
+  const deleteWishlistItem = (id: number) => {
+    if (confirm('确定要从心愿单删除吗？')) {
+      const all = storage.getWishlist();
+      storage.setWishlist(all.filter(i => i.id !== id));
+      fetchData();
+    }
+  };
+
   const exportToJSON = () => {
     const data = {
       items: storage.getItems(),
       logs: storage.getLogs(),
       categories: storage.getCategories(),
-      wishlist: storage.getWishlist()
+      wishlist: storage.getWishlist(),
+      consumables: storage.getConsumables()
     };
     const now = new Date().toISOString();
     storage.setLastBackup(now);
@@ -1225,6 +1671,7 @@ export default function App() {
           storage.setCategories(syncedCats);
           
           if (data.wishlist) storage.setWishlist(data.wishlist);
+          if (data.consumables) storage.setConsumables(data.consumables);
           
           const now = new Date().toISOString();
           storage.setLastRestore(now);
@@ -1308,6 +1755,43 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="space-y-12"
             >
+              {/* Consumables Section */}
+              <div className="space-y-6">
+                <CollapsibleSection 
+                  title="消耗品" 
+                  defaultOpen={true}
+                  rightElement={
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAddConsumable();
+                      }}
+                      className="text-[10px] font-bold uppercase tracking-widest text-black/40 hover:text-black transition-colors"
+                    >
+                      新增消耗品
+                    </button>
+                  }
+                >
+                  <div className="bg-black/[0.02] p-6 border border-black/5 mb-4">
+                    <p className="text-xs font-serif text-black/40 italic">“ 感受认真消耗带来的幸福感 ”</p>
+                  </div>
+                  <div className="divide-y divide-black/[0.03] border-t border-black/[0.03]">
+                    {consumables.filter(c => c.status !== 'finished').map(c => (
+                      <ConsumableCard 
+                        key={c.id} 
+                        consumable={c} 
+                        onEdit={handleEditConsumable}
+                        onDelete={deleteConsumable}
+                        onUpdate={updateConsumable}
+                      />
+                    ))}
+                    {consumables.filter(c => c.status !== 'finished').length === 0 && (
+                      <div className="py-8 text-center text-black/20 text-[10px] uppercase tracking-widest">暂无使用中的消耗品</div>
+                    )}
+                  </div>
+                </CollapsibleSection>
+              </div>
+
               <div className="flex gap-4">
                 <div className="relative flex-1">
                   <Search className="absolute left-0 top-1/2 -translate-y-1/2 text-black/20" size={14} />
@@ -1540,29 +2024,63 @@ export default function App() {
               <div className="space-y-8">
                 <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">长期主义</h3>
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-black/[0.02] p-6 space-y-2">
+                  <button onClick={() => showLongTermDetails(10)} className="bg-black/[0.02] p-6 space-y-2 text-left hover:bg-black/[0.05] transition-all">
                     <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 10 年以上</p>
                     <p className="text-3xl font-mono">{stats.longTermStats.tenPlus}</p>
                     <p className="text-[9px] text-black/20 italic">时光的见证者</p>
-                  </div>
-                  <div className="bg-black/[0.02] p-6 space-y-2">
+                  </button>
+                  <button onClick={() => showLongTermDetails(5)} className="bg-black/[0.02] p-6 space-y-2 text-left hover:bg-black/[0.05] transition-all">
                     <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 5 年以上</p>
                     <p className="text-3xl font-mono">{stats.longTermStats.fivePlus}</p>
                     <p className="text-[9px] text-black/20 italic">经久耐用的选择</p>
-                  </div>
-                  <div className="bg-black/[0.02] p-6 space-y-2">
+                  </button>
+                  <button onClick={() => showLongTermDetails(3)} className="bg-black/[0.02] p-6 space-y-2 text-left hover:bg-black/[0.05] transition-all">
                     <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 3 年以上</p>
                     <p className="text-3xl font-mono">{stats.longTermStats.threePlus}</p>
                     <p className="text-[9px] text-black/20 italic">稳定的生活伙伴</p>
-                  </div>
-                  <div className="bg-black/[0.02] p-6 space-y-2">
+                  </button>
+                  <button onClick={() => showLongTermDetails(1)} className="bg-black/[0.02] p-6 space-y-2 text-left hover:bg-black/[0.05] transition-all">
                     <p className="text-[8px] font-bold text-black/30 uppercase tracking-widest">陪伴 1 年以上</p>
                     <p className="text-3xl font-mono">{stats.longTermStats.onePlus}</p>
                     <p className="text-[9px] text-black/20 italic">通过了时间的考验</p>
-                  </div>
+                  </button>
                 </div>
                 <div className="p-6 border border-black/5 bg-black/[0.01] text-center">
                   <p className="text-xs italic text-black/40">“最好的物品，是那些能陪伴我们走过漫长岁月的。”</p>
+                </div>
+              </div>
+
+              <div className="space-y-8">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-black/20">消耗品统计</h3>
+                <div className="bg-black/[0.02] p-8 space-y-8">
+                  <div className="flex justify-between items-end">
+                    <div>
+                      <p className="text-[9px] font-bold text-black/30 uppercase tracking-widest mb-1">记录空瓶/空袋</p>
+                      <p className="text-4xl font-mono">{stats.consumableStats.finishedCount}</p>
+                    </div>
+                    <button 
+                      onClick={() => showConsumableDetails()}
+                      className="text-[10px] font-bold uppercase tracking-widest text-black/40 hover:text-black transition-colors"
+                    >
+                      查看全部
+                    </button>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-x-12 gap-y-4 pt-8 border-t border-black/5">
+                    {stats.consumableStats.byCategory.map(c => (
+                      <button 
+                        key={c.category} 
+                        onClick={() => showConsumableDetails(c.category)}
+                        className="flex justify-between items-center group"
+                      >
+                        <span className="text-xs text-black/40 group-hover:text-black transition-colors">{c.category}</span>
+                        <span className="text-sm font-mono">{c.count}</span>
+                      </button>
+                    ))}
+                    {stats.consumableStats.byCategory.length === 0 && (
+                      <p className="col-span-2 text-[10px] text-black/20 italic text-center">暂无消耗记录</p>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1747,6 +2265,13 @@ export default function App() {
         categories={categories}
       />
 
+      <ConsumableModal
+        isOpen={isConsumableModalOpen}
+        onClose={() => setIsConsumableModalOpen(false)}
+        onSave={updateConsumable}
+        consumable={editingConsumable}
+      />
+
       {/* Action Confirmation Modal */}
       <AnimatePresence>
         {pendingAction && (
@@ -1921,43 +2446,61 @@ export default function App() {
       {/* Detail View Modal */}
       <AnimatePresence>
         {detailView && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setDetailView(null)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-white rounded-none shadow-2xl p-8 max-h-[80vh] overflow-y-auto"
+              className="relative w-full max-w-lg bg-white rounded-none shadow-2xl flex flex-col max-h-[80vh]"
             >
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-2xl font-serif font-bold uppercase tracking-widest">
-                  {detailView === 'discarded' ? '已丢弃' : detailView === 'gifted' ? '已转赠' : '已转卖'}
-                </h2>
-                <button onClick={() => setDetailView(null)} className="p-2 hover:bg-black/5 rounded-full transition-colors">
-                  <X size={20} />
-                </button>
+              <div className="p-8 border-b border-black/5 flex justify-between items-center">
+                <div>
+                  <h2 className="text-2xl font-serif font-bold text-black">{detailView}</h2>
+                  <p className="text-[10px] text-black/30 uppercase tracking-[0.2em] mt-1">Detailed View</p>
+                </div>
+                <button onClick={() => setDetailView(null)} className="p-2 hover:bg-black/5 transition-colors"><X size={20} /></button>
               </div>
-              <div className="space-y-6">
-                {detailItems.map(item => (
-                  <div key={item.id} className="border-b border-black/5 pb-4">
-                    <div className="flex justify-between items-start mb-1">
-                      <h4 className="font-medium">{item.name}</h4>
-                      <span className="text-[10px] font-mono text-black/30">{item.removed_date}</span>
+              <div className="flex-1 overflow-y-auto p-8">
+                <div className="space-y-6">
+                  {detailItems.map(item => (
+                    <div key={item.id} className="border-b border-black/5 pb-4">
+                      <div className="flex justify-between items-start mb-1">
+                        <h4 className="font-medium">{item.name}</h4>
+                        <span className="text-[10px] font-mono text-black/30">{item.removed_date || format(new Date(item.created_at), 'yyyy-MM-dd')}</span>
+                      </div>
+                      <div className="flex gap-4 text-[10px] font-mono text-black/40 uppercase">
+                        <span>{item.category}</span>
+                        {item.recipient && <span>接收人: {item.recipient}</span>}
+                        {item.selling_price && <span>成交价: ¥{item.selling_price}</span>}
+                        <span>¥{item.price.toLocaleString()}</span>
+                      </div>
                     </div>
-                    <div className="flex gap-4 text-[10px] font-mono text-black/40 uppercase">
-                      <span>{item.category}</span>
-                      {item.recipient && <span>接收人: {item.recipient}</span>}
-                      {item.selling_price && <span>成交价: ¥{item.selling_price}</span>}
+                  ))}
+                  {detailConsumables.map(c => (
+                    <div key={c.id} className="border-b border-black/5 pb-4">
+                      <div className="flex justify-between items-start mb-1">
+                        <h4 className="font-medium">{c.name}</h4>
+                        <span className="text-[10px] font-mono text-black/30">已用完</span>
+                      </div>
+                      <div className="flex gap-4 text-[10px] font-mono text-black/40 uppercase">
+                        <span>{c.category}</span>
+                        <span>{c.quantity} {c.unit_capacity}</span>
+                        <span>¥{c.price.toLocaleString()}</span>
+                      </div>
+                      {c.experience && <p className="mt-2 text-[10px] text-black/60 italic">“{c.experience}”</p>}
                     </div>
-                  </div>
-                ))}
-                {detailItems.length === 0 && <p className="text-center py-12 text-black/20 italic">暂无记录。</p>}
+                  ))}
+                  {detailItems.length === 0 && detailConsumables.length === 0 && (
+                    <p className="text-center py-12 text-black/20 italic">暂无记录。</p>
+                  )}
+                </div>
               </div>
             </motion.div>
           </div>

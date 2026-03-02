@@ -66,3 +66,26 @@ export interface HistoryPoint {
   date: string;
   change: number;
 }
+
+export interface SubConsumable {
+  id: number;
+  status: 'to_use' | 'using' | 'finished';
+  start_date?: string;
+  finish_date?: string;
+  usage_percentage?: number; // 0-100
+}
+
+export interface Consumable {
+  id: number;
+  name: string;
+  category: string;
+  quantity: number;
+  unit_capacity: string;
+  price: number;
+  experience?: string;
+  repurchase: boolean;
+  status: 'to_use' | 'using' | 'finished';
+  sub_items: SubConsumable[];
+  created_at: string;
+  planned_days?: number;
+}
